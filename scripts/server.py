@@ -50,6 +50,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "price_momentum_3d",
+        "name": "3-Day Price Momentum",
+        "category": "Price Trend",
+        "meaning": "Keep stocks whose close has moved up or down by a chosen percentage over the last 3 trading days.",
+        "fields": [
+            {"key": "minMomentum3D", "label": "Min 3D change %", "default": 2, "step": 0.5},
+            {"key": "maxMomentum3D", "label": "Max 3D change %", "default": 12, "step": 0.5},
+        ],
+    },
+    {
         "id": "rsi14_range",
         "name": "RSI 14 Range",
         "category": "Momentum Risk",
@@ -320,6 +330,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "deliveryPct": ctx["delivery_pct"],
         "adv20": ctx["adv20"],
         "relativeVolume": ctx["relative_volume"],
+        "momentum3D": ctx["momentum_3d"],
         "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
         "nextClose": next_row["close"] if next_row else None,
@@ -367,6 +378,11 @@ def evaluate_filter(ctx, selected):
             return False, "Delivery % is not available for this stock/date."
         passed = min_delivery_pct <= ctx["delivery_pct"] <= max_delivery_pct
         return passed, f"Delivery {ctx['delivery_pct']:.2f}%; required {min_delivery_pct:g}%-{max_delivery_pct:g}%."
+    if filter_id == "price_momentum_3d":
+        min_momentum = float(values.get("minMomentum3D", 2))
+        max_momentum = float(values.get("maxMomentum3D", 12))
+        passed = min_momentum <= ctx["momentum_3d"] <= max_momentum
+        return passed, f"3D price change {ctx['momentum_3d']:+.2f}%; required {min_momentum:g}%-{max_momentum:g}%."
     if filter_id == "rsi14_range":
         rsi_min = float(values.get("rsiMin", 50))
         rsi_max = float(values.get("rsiMax", 68))
@@ -388,6 +404,7 @@ def build_context(rows, index):
         "delivery_pct": current.get("delivery_pct"),
         "adv20": avg(volumes[-21:-1]),
         "relative_volume": relative_to_avg(current["volume"], avg(volumes[-21:-1])),
+        "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
         "rsi14": rsi(closes, 14),
     }
 
@@ -401,7 +418,10 @@ def build_indicators(rows):
     relative_volume = [0] * len(rows)
     for index in range(len(rows)):
         relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
-    return {"adv20": adv20, "relative_volume": relative_volume, "rsi14": rsi_series(closes, 14)}
+    momentum_3d = [0] * len(rows)
+    for index in range(3, len(rows)):
+        momentum_3d[index] = pct(closes[index], closes[index - 3])
+    return {"adv20": adv20, "relative_volume": relative_volume, "momentum_3d": momentum_3d, "rsi14": rsi_series(closes, 14)}
 
 
 def build_backtest_context(rows, indicators, index):
@@ -414,6 +434,7 @@ def build_backtest_context(rows, indicators, index):
         "delivery_pct": current.get("delivery_pct"),
         "adv20": indicators["adv20"][index],
         "relative_volume": indicators["relative_volume"][index],
+        "momentum_3d": indicators["momentum_3d"][index],
         "rsi14": indicators["rsi14"][index],
     }
 
