@@ -49,10 +49,23 @@ CREATE TABLE IF NOT EXISTS daily_prices (
   FOREIGN KEY (instrument_id) REFERENCES instruments(id)
 );
 
+CREATE TABLE IF NOT EXISTS daily_delivery (
+  instrument_id INTEGER NOT NULL,
+  trade_date TEXT NOT NULL,
+  traded_qty INTEGER NOT NULL DEFAULT 0,
+  deliverable_qty INTEGER NOT NULL DEFAULT 0,
+  delivery_pct REAL,
+  source_file TEXT,
+  PRIMARY KEY (instrument_id, trade_date),
+  FOREIGN KEY (instrument_id) REFERENCES instruments(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_instruments_symbol ON instruments(symbol);
 CREATE INDEX IF NOT EXISTS idx_instruments_isin ON instruments(isin);
 CREATE INDEX IF NOT EXISTS idx_daily_prices_date ON daily_prices(trade_date);
 CREATE INDEX IF NOT EXISTS idx_daily_prices_instrument_date ON daily_prices(instrument_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_daily_delivery_date ON daily_delivery(trade_date);
+CREATE INDEX IF NOT EXISTS idx_daily_delivery_instrument_date ON daily_delivery(instrument_id, trade_date);
 """
 
 HEADERS = {
@@ -63,8 +76,9 @@ HEADERS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download NSE/BSE UDiFF bhavcopy and import into clean SQLite DB.")
+    parser = argparse.ArgumentParser(description="Download NSE/BSE EOD reports and import into clean SQLite DB.")
     parser.add_argument("--exchange", choices=["NSE", "BSE", "both"], default="both")
+    parser.add_argument("--dataset", choices=["prices", "delivery", "both"], default="prices")
     parser.add_argument("--date", help="Single date in YYYY-MM-DD")
     parser.add_argument("--start-date", help="Start date in YYYY-MM-DD")
     parser.add_argument("--end-date", help="End date in YYYY-MM-DD")
@@ -76,6 +90,7 @@ def main():
 
     dates = requested_dates(args)
     exchanges = ["NSE", "BSE"] if args.exchange == "both" else [args.exchange]
+    datasets = ["prices", "delivery"] if args.dataset == "both" else [args.dataset]
     raw_dir = Path(args.raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -88,31 +103,36 @@ def main():
 
     for trade_date in dates:
         if trade_date.weekday() >= 5:
-            skipped += len(exchanges)
+            skipped += len(exchanges) * len(datasets)
             continue
-        for exchange in exchanges:
-            try:
-                csv_path = existing_csv(raw_dir, exchange, trade_date)
-                if not csv_path and not args.no_download:
-                    csv_path = download_for_date(raw_dir, exchange, trade_date)
-                    time.sleep(args.sleep)
-                if not csv_path:
+        for dataset in datasets:
+            for exchange in exchanges:
+                if dataset == "delivery" and exchange != "NSE":
                     skipped += 1
-                    print(f"No {exchange} bhavcopy for {trade_date:%Y-%m-%d}")
                     continue
-                rows = import_file(conn, csv_path, exchange, trade_date)
-                conn.commit()
-                imported += 1
-                print(f"Imported {exchange} {trade_date:%Y-%m-%d}: {rows:,} rows from {csv_path.name}")
-            except Exception as exc:
-                failed.append((exchange, trade_date.date().isoformat(), str(exc)))
-                print(f"Failed {exchange} {trade_date:%Y-%m-%d}: {exc}")
+                try:
+                    csv_path = existing_report(raw_dir, exchange, trade_date, dataset)
+                    if not csv_path and not args.no_download:
+                        csv_path = download_for_date(raw_dir, exchange, trade_date, dataset)
+                        time.sleep(args.sleep)
+                    if not csv_path:
+                        skipped += 1
+                        print(f"No {exchange} {dataset} report for {trade_date:%Y-%m-%d}")
+                        continue
+                    rows = import_report(conn, csv_path, exchange, trade_date, dataset)
+                    conn.commit()
+                    imported += 1
+                    print(f"Imported {exchange} {dataset} {trade_date:%Y-%m-%d}: {rows:,} rows from {csv_path.name}")
+                except Exception as exc:
+                    failed.append((exchange, dataset, trade_date.date().isoformat(), str(exc)))
+                    print(f"Failed {exchange} {dataset} {trade_date:%Y-%m-%d}: {exc}")
 
     stats = conn.execute(
         """
         SELECT
           COUNT(*) AS instruments,
           (SELECT COUNT(*) FROM daily_prices) AS rows,
+          (SELECT COUNT(*) FROM daily_delivery) AS delivery_rows,
           (SELECT MIN(trade_date) FROM daily_prices) AS first_date,
           (SELECT MAX(trade_date) FROM daily_prices) AS last_date
         FROM instruments
@@ -125,11 +145,12 @@ def main():
     print(f"Skipped files: {skipped}")
     print(f"Instruments: {stats[0]:,}")
     print(f"Daily rows: {stats[1]:,}")
-    print(f"Date range: {stats[2]} to {stats[3]}")
+    print(f"Delivery rows: {stats[2]:,}")
+    print(f"Date range: {stats[3]} to {stats[4]}")
     if failed:
         print(f"Failures: {len(failed)}")
-        for exchange, date, reason in failed[:20]:
-            print(f"- {exchange} {date}: {reason}")
+        for exchange, dataset, date, reason in failed[:20]:
+            print(f"- {exchange} {dataset} {date}: {reason}")
 
 
 def requested_dates(args):
@@ -147,16 +168,16 @@ def requested_dates(args):
     return dates
 
 
-def download_for_date(raw_dir, exchange, trade_date):
-    exchange_dir = raw_dir / exchange
+def download_for_date(raw_dir, exchange, trade_date, dataset):
+    exchange_dir = raw_dir / exchange / dataset
     exchange_dir.mkdir(parents=True, exist_ok=True)
-    urls = urls_for(exchange, trade_date)
+    urls = urls_for(exchange, trade_date, dataset)
     for url in urls:
         try:
             data = fetch(url, exchange)
             if url.lower().endswith(".zip"):
                 return extract_zip(exchange_dir, data)
-            path = exchange_dir / filename_for(exchange, trade_date)
+            path = exchange_dir / filename_for(exchange, trade_date, dataset)
             path.write_bytes(data)
             return path
         except HTTPError as exc:
@@ -168,7 +189,10 @@ def download_for_date(raw_dir, exchange, trade_date):
     return None
 
 
-def urls_for(exchange, trade_date):
+def urls_for(exchange, trade_date, dataset):
+    if dataset == "delivery":
+        name = f"MTO_{trade_date:%d%m%Y}.DAT"
+        return [f"https://nsearchives.nseindia.com/archives/equities/mto/{name}"]
     if exchange == "NSE":
         name = f"BhavCopy_NSE_CM_0_0_0_{trade_date:%Y%m%d}_F_0000.csv.zip"
         return [f"https://nsearchives.nseindia.com/content/cm/{name}"]
@@ -180,7 +204,9 @@ def urls_for(exchange, trade_date):
     ]
 
 
-def filename_for(exchange, trade_date):
+def filename_for(exchange, trade_date, dataset="prices"):
+    if dataset == "delivery":
+        return f"MTO_{trade_date:%d%m%Y}.DAT"
     return f"BhavCopy_{exchange}_CM_0_0_0_{trade_date:%Y%m%d}_F_0000.CSV"
 
 
@@ -203,17 +229,31 @@ def extract_zip(output_dir, data):
         return path
 
 
-def existing_csv(raw_dir, exchange, trade_date):
-    exchange_dir = raw_dir / exchange
-    candidates = [exchange_dir / filename_for(exchange, trade_date)]
+def existing_report(raw_dir, exchange, trade_date, dataset):
+    exchange_dir = raw_dir / exchange / dataset
+    legacy_exchange_dir = raw_dir / exchange
+    candidates = [exchange_dir / filename_for(exchange, trade_date, dataset)]
+    if dataset == "delivery":
+        candidates.append(legacy_exchange_dir / filename_for(exchange, trade_date, dataset))
+        return next((path for path in candidates if path.exists() and path.stat().st_size > 0), None)
     if exchange == "NSE":
         candidates.append(exchange_dir / f"BhavCopy_NSE_CM_0_0_0_{trade_date:%Y%m%d}_F_0000.csv")
+        candidates.append(legacy_exchange_dir / filename_for(exchange, trade_date, dataset))
+        candidates.append(legacy_exchange_dir / f"BhavCopy_NSE_CM_0_0_0_{trade_date:%Y%m%d}_F_0000.csv")
     else:
         candidates.append(exchange_dir / f"EQ{trade_date:%d%m%y}.CSV")
+        candidates.append(legacy_exchange_dir / filename_for(exchange, trade_date, dataset))
+        candidates.append(legacy_exchange_dir / f"EQ{trade_date:%d%m%y}.CSV")
     return next((path for path in candidates if path.exists() and path.stat().st_size > 0), None)
 
 
-def import_file(conn, csv_path, exchange, trade_date):
+def import_report(conn, csv_path, exchange, trade_date, dataset):
+    if dataset == "delivery":
+        return import_delivery_file(conn, csv_path, trade_date)
+    return import_price_file(conn, csv_path, exchange, trade_date)
+
+
+def import_price_file(conn, csv_path, exchange, trade_date):
     count = 0
     with csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -254,6 +294,67 @@ def import_file(conn, csv_path, exchange, trade_date):
             )
             count += 1
     return count
+
+
+def import_delivery_file(conn, csv_path, trade_date):
+    count = 0
+    with csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            parsed = parse_delivery_row(row, csv_path.name, trade_date)
+            if not parsed:
+                continue
+            instrument_id = upsert_delivery_instrument(conn, parsed)
+            if not instrument_id:
+                continue
+            conn.execute(
+                """
+                INSERT INTO daily_delivery (
+                  instrument_id, trade_date, traded_qty, deliverable_qty,
+                  delivery_pct, source_file
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instrument_id, trade_date) DO UPDATE SET
+                  traded_qty = excluded.traded_qty,
+                  deliverable_qty = excluded.deliverable_qty,
+                  delivery_pct = excluded.delivery_pct,
+                  source_file = excluded.source_file
+                """,
+                (
+                    instrument_id,
+                    parsed["trade_date"],
+                    parsed["traded_qty"],
+                    parsed["deliverable_qty"],
+                    parsed["delivery_pct"],
+                    parsed["source_file"],
+                ),
+            )
+            count += 1
+    return count
+
+
+def parse_delivery_row(row, source_file, fallback_date):
+    if len(row) < 7 or clean_name(row[0]) != "20":
+        return None
+    symbol = clean_symbol(row[2])
+    series = clean_name(row[3])
+    traded_qty = int(to_float(row[4]) or 0)
+    deliverable_qty = int(to_float(row[5]) or 0)
+    delivery_pct = to_float(row[6])
+    if not symbol:
+        return None
+    return {
+        "exchange": "NSE",
+        "symbol": symbol,
+        "name": symbol,
+        "series": series,
+        "instrument_type": "STK",
+        "trade_date": fallback_date.date().isoformat(),
+        "traded_qty": traded_qty,
+        "deliverable_qty": deliverable_qty,
+        "delivery_pct": delivery_pct,
+        "source_file": source_file,
+    }
 
 
 def parse_udiff_row(row, exchange, source_file, fallback_date):
@@ -338,6 +439,50 @@ def upsert_instrument(conn, parsed):
         "SELECT id FROM instruments WHERE exchange = ? AND symbol = ?",
         (parsed["exchange"], parsed["symbol"]),
     ).fetchone()[0]
+
+
+def upsert_delivery_instrument(conn, parsed):
+    existing = conn.execute(
+        """
+        SELECT i.id
+        FROM instruments i
+        WHERE i.exchange = ? AND i.symbol = ?
+          AND EXISTS (
+            SELECT 1
+            FROM daily_prices p
+            WHERE p.instrument_id = i.id
+            LIMIT 1
+          )
+        """,
+        (parsed["exchange"], parsed["symbol"]),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """
+            UPDATE instruments
+            SET
+              series = COALESCE(NULLIF(series, ''), ?),
+              first_trade_date = CASE
+                WHEN first_trade_date IS NULL OR ? < first_trade_date THEN ?
+                ELSE first_trade_date
+              END,
+              last_trade_date = CASE
+                WHEN last_trade_date IS NULL OR ? > last_trade_date THEN ?
+                ELSE last_trade_date
+              END
+            WHERE id = ?
+            """,
+            (
+                parsed["series"],
+                parsed["trade_date"],
+                parsed["trade_date"],
+                parsed["trade_date"],
+                parsed["trade_date"],
+                existing[0],
+            ),
+        )
+        return existing[0]
+    return None
 
 
 def parse_date(value):
