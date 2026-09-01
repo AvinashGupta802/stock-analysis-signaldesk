@@ -352,6 +352,7 @@ function humanValues(selected) {
   if (selected.id === "price_range") return `Close between Rs. ${values.minPrice} and Rs. ${values.maxPrice}`;
   if (selected.id === "adv20_min") return `20D average volume at least ${formatNumber(values.minAdv20)}`;
   if (selected.id === "relative_volume") return `Today volume between ${values.minRelativeVolume}x and ${values.maxRelativeVolume}x of 20D average volume`;
+  if (selected.id === "delivery_pct_range") return `Delivery percentage between ${values.minDeliveryPct}% and ${values.maxDeliveryPct}%`;
   if (selected.id === "rsi14_range") return `RSI 14 between ${values.rsiMin} and ${values.rsiMax}`;
   return JSON.stringify(values);
 }

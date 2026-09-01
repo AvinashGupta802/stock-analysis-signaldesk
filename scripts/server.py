@@ -40,6 +40,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "delivery_pct_range",
+        "name": "Delivery % Range",
+        "category": "Delivery",
+        "meaning": "Keep stocks where enough of the day's traded quantity was carried forward as delivery.",
+        "fields": [
+            {"key": "minDeliveryPct", "label": "Min delivery %", "default": 50, "step": 1},
+            {"key": "maxDeliveryPct", "label": "Max delivery %", "default": 100, "step": 1},
+        ],
+    },
+    {
         "id": "rsi14_range",
         "name": "RSI 14 Range",
         "category": "Momentum Risk",
@@ -339,6 +349,13 @@ def evaluate_filter(ctx, selected):
         max_relative_volume = float(values.get("maxRelativeVolume", 999))
         passed = min_relative_volume <= ctx["relative_volume"] <= max_relative_volume
         return passed, f"Relative volume {ctx['relative_volume']:.2f}x; required {min_relative_volume:g}x-{max_relative_volume:g}x."
+    if filter_id == "delivery_pct_range":
+        min_delivery_pct = float(values.get("minDeliveryPct", 50))
+        max_delivery_pct = float(values.get("maxDeliveryPct", 100))
+        if ctx["delivery_pct"] is None:
+            return False, "Delivery % is not available for this stock/date."
+        passed = min_delivery_pct <= ctx["delivery_pct"] <= max_delivery_pct
+        return passed, f"Delivery {ctx['delivery_pct']:.2f}%; required {min_delivery_pct:g}%-{max_delivery_pct:g}%."
     if filter_id == "rsi14_range":
         rsi_min = float(values.get("rsiMin", 50))
         rsi_max = float(values.get("rsiMax", 68))
