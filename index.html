@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SignalDesk India</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar" aria-label="Stock groups">
+        <div class="brand">
+          <div class="brand-mark">SD</div>
+          <div>
+            <h1>SignalDesk</h1>
+            <p>NSE EOD signals</p>
+          </div>
+        </div>
+
+        <section class="panel compact">
+          <label for="groupSelect">Stock group</label>
+          <select id="groupSelect"></select>
+        </section>
+
+        <section class="panel compact">
+          <label for="dateSelect">Signal date</label>
+          <select id="dateSelect"></select>
+        </section>
+        <section class="panel compact">
+          <label for="customGroupName">Custom group</label>
+          <input id="customGroupName" type="text" placeholder="Group name" autocomplete="off" />
+          <textarea id="customGroupSymbols" rows="4" placeholder="RELIANCE HDFCBANK ARIES"></textarea>
+          <button id="saveGroupButton" type="button">Save group</button>
+          <p id="customGroupStatus" class="helper-text"></p>
+        </section>
+        <section class="panel compact">
+          <label for="stockSearchInput">Find stock</label>
+          <input id="stockSearchInput" type="search" placeholder="Search symbol or name" autocomplete="off" />
+          <label class="inline-toggle">
+            <input id="showHoldInput" type="checkbox" />
+            <span>Show Hold / Neutral stocks</span>
+          </label>
+        </section>
+        <section class="panel compact">
+          <label for="signalViewSelect">Signal view</label>
+          <select id="signalViewSelect">
+            <option value="long">Long setups</option>
+            <option value="all">All signals</option>
+            <option value="short">Short setups</option>
+            <option value="hold">Hold / Neutral</option>
+          </select>
+        </section>
+
+        <section class="panel compact">
+          <label for="thresholdInput">Strong signal threshold</label>
+          <input id="thresholdInput" type="range" min="3" max="8" step="1" value="5" />
+          <div class="range-meta">
+            <span>Loose</span>
+            <strong id="thresholdValue">5</strong>
+            <span>Strict</span>
+          </div>
+        </section>
+        <section class="panel compact">
+          <label>Data status</label>
+          <p id="importStatus" class="helper-text">Connecting to SQLite...</p>
+        </section>
+        <section class="panel rule-config">
+          <div class="section-title">
+            <h2>Filters</h2>
+            <span id="filterCount"></span>
+          </div>
+          <div id="filtersList" class="check-list"></div>
+        </section>
+
+
+
+        <section class="panel filter-values">
+          <div class="section-title">
+            <h2>Filter values</h2>
+          </div>
+          <div class="input-grid two-col">
+            <label>Min price
+              <input id="minPriceInput" type="number" min="0" step="1" value="100" />
+            </label>
+            <label>Max price
+              <input id="maxPriceInput" type="number" min="0" step="1" value="500" />
+            </label>
+          </div>
+          <label>20D ADV minimum
+            <input id="minAdv20Input" type="number" min="0" step="10000" value="1000000" />
+          </label>
+          <label>Relative volume rule
+            <input id="relVolumeMinInput" type="number" min="0" step="0.1" value="1.5" />
+          </label>
+          <div class="input-grid two-col">
+            <label>RSI min
+              <input id="rsiMinInput" type="number" min="0" max="100" step="1" value="50" />
+            </label>
+            <label>RSI max
+              <input id="rsiMaxInput" type="number" min="0" max="100" step="1" value="68" />
+            </label>
+          </div>
+          <label>Max above EMA9 %
+            <input id="ema9DistanceMaxInput" type="number" min="0" step="0.5" value="5" />
+          </label>
+          <label>Quiet setup: within 20D high %
+            <input id="quietNearHighPctInput" type="number" min="0" step="0.5" value="5" />
+          </label>
+          <label>Quiet setup: min 3D ROC %
+            <input id="quietRoc3MinInput" type="number" step="0.5" value="1.5" />
+          </label>
+        </section>
+
+        <section class="panel rule-config">
+          <div class="section-title">
+            <h2>Swing rules</h2>
+            <span id="selectedRuleCount"></span>
+          </div>
+          <div id="ruleControls" class="check-list"></div>
+        </section>
+
+        <section class="panel rule-list">
+          <div class="section-title">
+            <h2>Active rules</h2>
+            <span id="ruleCount"></span>
+          </div>
+          <div id="rulesList"></div>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">2-5 day swing trading scanner</p>
+            <h2 id="pageTitle">Swing trade signals</h2>
+          </div>
+          <div class="market-clock">
+            <span>Mode</span>
+            <strong>EOD first</strong>
+          </div>
+        </header>
+
+        <section class="metrics-grid" id="metricsGrid"></section>
+
+        <section class="content-grid">
+          <div class="recommendations">
+            <div class="section-title">
+              <h2>Ranked signals</h2>
+              <span id="recommendationMeta"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Stock</th>
+                    <th>Signal</th>
+                    <th>Score</th>
+                    <th>Rules</th>
+                    <th>Next day</th>
+                    <th>Close</th>
+                  </tr>
+                </thead>
+                <tbody id="recommendationsBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside class="details-panel">
+            <div class="section-title">
+              <h2 id="selectedStockTitle">Stock detail</h2>
+              <span id="selectedSignalPill"></span>
+            </div>
+            <div id="stockChart" class="chart"></div>
+            <div id="stockDetails" class="stock-details"></div>
+          </aside>
+        </section>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="./app.js?v=5"></script>
+  </body>
+</html>
+
+
+
+
+
