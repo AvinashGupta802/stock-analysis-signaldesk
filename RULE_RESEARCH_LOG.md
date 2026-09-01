@@ -15,8 +15,8 @@ For each item we will record:
 
 | Step | Type | Name | Status | Notes |
 | --- | --- | --- | --- | --- |
-| 1 | Universe | NSE only | Planned | Avoid NSE/BSE confusion. |
-| 2 | Filter | Price range | Planned | Test by itself first. |
+| 1 | Universe | NSE only | Active | Avoid NSE/BSE confusion. |
+| 2 | Filter | Price range | Active | Only live filter in the clean UI. Test by itself first. |
 | 3 | Filter | 20D ADV | Planned | Liquidity and execution quality. |
 | 4 | Filter | RSI 14 range | Planned | Avoid weak or over-extended names. |
 | 5 | Rule | 3-day ROC | Planned | Short-term momentum. |
@@ -31,3 +31,17 @@ For each item we will record:
 - Add the next item only after recording the effect.
 - After three or more useful items exist, run criss-cross combination sweeps.
 - Do not promote any rule to default unless the portfolio test improves after costs.
+
+## Active UI
+
+Only `NSE only + Price range` is active in the clean branch.
+
+Not active yet:
+
+- 20D ADV
+- RSI
+- Relative volume
+- 3-day ROC
+- Near 20D high
+- Close position
+- Any combined score

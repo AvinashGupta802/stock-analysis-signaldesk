@@ -3,17 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SignalDesk India</title>
+    <title>SignalDesk Rule Lab</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app-shell">
-      <aside class="sidebar" aria-label="Stock groups">
+      <aside class="sidebar" aria-label="Rule lab controls">
         <div class="brand">
           <div class="brand-mark">SD</div>
           <div>
             <h1>SignalDesk</h1>
-            <p>NSE EOD signals</p>
+            <p>NSE buy engine lab</p>
           </div>
         </div>
 
@@ -26,57 +26,15 @@
           <label for="dateSelect">Signal date</label>
           <select id="dateSelect"></select>
         </section>
-        <section class="panel compact">
-          <label for="customGroupName">Custom group</label>
-          <input id="customGroupName" type="text" placeholder="Group name" autocomplete="off" />
-          <textarea id="customGroupSymbols" rows="4" placeholder="RELIANCE HDFCBANK ARIES"></textarea>
-          <button id="saveGroupButton" type="button">Save group</button>
-          <p id="customGroupStatus" class="helper-text"></p>
-        </section>
-        <section class="panel compact">
-          <label for="stockSearchInput">Find stock</label>
-          <input id="stockSearchInput" type="search" placeholder="Search symbol or name" autocomplete="off" />
-          <label class="inline-toggle">
-            <input id="showHoldInput" type="checkbox" />
-            <span>Show Hold / Neutral stocks</span>
-          </label>
-        </section>
-        <section class="panel compact">
-          <label for="signalViewSelect">Signal view</label>
-          <select id="signalViewSelect">
-            <option value="long">Long setups</option>
-            <option value="all">All signals</option>
-            <option value="short">Short setups</option>
-            <option value="hold">Hold / Neutral</option>
-          </select>
-        </section>
 
         <section class="panel compact">
-          <label for="thresholdInput">Strong signal threshold</label>
-          <input id="thresholdInput" type="range" min="3" max="8" step="1" value="5" />
-          <div class="range-meta">
-            <span>Loose</span>
-            <strong id="thresholdValue">5</strong>
-            <span>Strict</span>
-          </div>
+          <label for="searchInput">Find stock</label>
+          <input id="searchInput" type="search" placeholder="Search symbol or name" autocomplete="off" />
         </section>
-        <section class="panel compact">
-          <label>Data status</label>
-          <p id="importStatus" class="helper-text">Connecting to SQLite...</p>
-        </section>
-        <section class="panel rule-config">
-          <div class="section-title">
-            <h2>Filters</h2>
-            <span id="filterCount"></span>
-          </div>
-          <div id="filtersList" class="check-list"></div>
-        </section>
-
-
 
         <section class="panel filter-values">
           <div class="section-title">
-            <h2>Filter values</h2>
+            <h2>Step 1 Value</h2>
           </div>
           <div class="input-grid two-col">
             <label>Min price
@@ -86,57 +44,30 @@
               <input id="maxPriceInput" type="number" min="0" step="1" value="500" />
             </label>
           </div>
-          <label>20D ADV minimum
-            <input id="minAdv20Input" type="number" min="0" step="10000" value="1000000" />
-          </label>
-          <label>Relative volume rule
-            <input id="relVolumeMinInput" type="number" min="0" step="0.1" value="1.5" />
-          </label>
-          <div class="input-grid two-col">
-            <label>RSI min
-              <input id="rsiMinInput" type="number" min="0" max="100" step="1" value="50" />
-            </label>
-            <label>RSI max
-              <input id="rsiMaxInput" type="number" min="0" max="100" step="1" value="68" />
-            </label>
-          </div>
-          <label>Max above EMA9 %
-            <input id="ema9DistanceMaxInput" type="number" min="0" step="0.5" value="5" />
-          </label>
-          <label>Quiet setup: within 20D high %
-            <input id="quietNearHighPctInput" type="number" min="0" step="0.5" value="5" />
-          </label>
-          <label>Quiet setup: min 3D ROC %
-            <input id="quietRoc3MinInput" type="number" step="0.5" value="1.5" />
-          </label>
+          <button id="runButton" type="button">Run filter</button>
         </section>
 
-        <section class="panel rule-config">
-          <div class="section-title">
-            <h2>Swing rules</h2>
-            <span id="selectedRuleCount"></span>
-          </div>
-          <div id="ruleControls" class="check-list"></div>
+        <section class="panel compact">
+          <label>Data status</label>
+          <p id="statusText" class="helper-text">Connecting to SQLite...</p>
         </section>
 
-        <section class="panel rule-list">
-          <div class="section-title">
-            <h2>Active rules</h2>
-            <span id="ruleCount"></span>
-          </div>
-          <div id="rulesList"></div>
+        <section class="panel compact">
+          <label for="customGroupName">Custom group</label>
+          <input id="customGroupName" type="text" placeholder="Coming back in next step" disabled />
+          <p class="helper-text">Custom groups are preserved in the database. We will re-enable this after the base flow is clean.</p>
         </section>
       </aside>
 
       <section class="workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">2-5 day swing trading scanner</p>
-            <h2 id="pageTitle">Swing trade signals</h2>
+            <p class="eyebrow">One filter at a time</p>
+            <h2>NSE Buy Engine Rule Lab</h2>
           </div>
           <div class="market-clock">
-            <span>Mode</span>
-            <strong>EOD first</strong>
+            <span>Current stage</span>
+            <strong>Baseline</strong>
           </div>
         </header>
 
@@ -145,44 +76,48 @@
         <section class="content-grid">
           <div class="recommendations">
             <div class="section-title">
-              <h2>Ranked signals</h2>
-              <span id="recommendationMeta"></span>
+              <h2>Eligible Stocks</h2>
+              <span id="resultMeta"></span>
             </div>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Stock</th>
-                    <th>Signal</th>
-                    <th>Score</th>
-                    <th>Rules</th>
-                    <th>Next day</th>
+                    <th>Status</th>
                     <th>Close</th>
+                    <th>Volume</th>
+                    <th>Next day</th>
+                    <th>Reason</th>
                   </tr>
                 </thead>
-                <tbody id="recommendationsBody"></tbody>
+                <tbody id="resultsBody"></tbody>
               </table>
             </div>
           </div>
 
           <aside class="details-panel">
             <div class="section-title">
-              <h2 id="selectedStockTitle">Stock detail</h2>
-              <span id="selectedSignalPill"></span>
+              <h2 id="stepName">Step 1</h2>
             </div>
-            <div id="stockChart" class="chart"></div>
-            <div id="stockDetails" class="stock-details"></div>
+            <div class="detail-block">
+              <h3>Meaning</h3>
+              <p id="stepMeaning"></p>
+            </div>
+            <div class="detail-block">
+              <h3>Decision</h3>
+              <p id="stepDecision"></p>
+            </div>
+            <div class="section-title">
+              <h2 id="selectedTitle">Stock detail</h2>
+            </div>
+            <div id="chart" class="chart"></div>
+            <div id="details" class="stock-details"></div>
           </aside>
         </section>
       </section>
     </main>
 
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="./app.js?v=5"></script>
+    <script src="./app.js?v=clean-1"></script>
   </body>
 </html>
-
-
-
-
-
