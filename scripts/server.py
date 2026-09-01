@@ -129,6 +129,10 @@ def get_bootstrap():
                FROM daily_prices p
                JOIN instruments i ON i.id = p.instrument_id
                WHERE i.exchange = 'NSE') AS price_count,
+              (SELECT COUNT(*)
+               FROM daily_delivery d
+               JOIN instruments i ON i.id = d.instrument_id
+               WHERE i.exchange = 'NSE') AS delivery_count,
               MIN(first_trade_date) AS first_date,
               MAX(last_trade_date) AS last_date
             FROM instruments
@@ -245,10 +249,15 @@ def backtest_rule(payload):
 def evaluate_stock_on_date(conn, stock, trade_date, rule):
     rows = conn.execute(
         """
-        SELECT trade_date, open, high, low, close, volume
-        FROM daily_prices
-        WHERE instrument_id = ? AND trade_date <= ?
-        ORDER BY trade_date DESC
+        SELECT
+          p.trade_date, p.open, p.high, p.low, p.close, p.volume,
+          d.deliverable_qty, d.delivery_pct
+        FROM daily_prices p
+        LEFT JOIN daily_delivery d
+          ON d.instrument_id = p.instrument_id
+         AND d.trade_date = p.trade_date
+        WHERE p.instrument_id = ? AND p.trade_date <= ?
+        ORDER BY p.trade_date DESC
         LIMIT 80
         """,
         (stock["id"], trade_date),
@@ -276,6 +285,8 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "name": stock["name"],
         "close": ctx["close"],
         "volume": ctx["volume"],
+        "deliverableQty": ctx["deliverable_qty"],
+        "deliveryPct": ctx["delivery_pct"],
         "adv20": ctx["adv20"],
         "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
@@ -329,6 +340,8 @@ def build_context(rows, index):
         "date": current["trade_date"],
         "close": current["close"],
         "volume": current["volume"],
+        "deliverable_qty": current.get("deliverable_qty"),
+        "delivery_pct": current.get("delivery_pct"),
         "adv20": avg(volumes[-21:-1]),
         "rsi14": rsi(closes, 14),
     }

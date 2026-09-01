@@ -201,7 +201,7 @@ function renderRuleMeaning() {
 
 function renderStatus() {
   el.statusText.textContent = state.stats
-    ? `SQLite connected: ${formatNumber(state.stats.stock_count)} NSE stocks, ${formatNumber(state.stats.price_count)} EOD rows.`
+    ? `SQLite connected: ${formatNumber(state.stats.stock_count)} NSE stocks, ${formatNumber(state.stats.price_count)} EOD rows, ${formatNumber(state.stats.delivery_count || 0)} delivery rows.`
     : "SQLite connected.";
 }
 
@@ -218,7 +218,7 @@ function renderMetrics() {
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">No stocks passed this rule.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="7" class="empty-state">No stocks passed this rule.</td></tr>`;
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
@@ -226,6 +226,7 @@ function renderTable() {
       <td class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name)}</span></td>
       <td>Rs. ${formatMoney(item.close)}</td>
       <td>${formatNumber(item.volume)}</td>
+      <td>${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}</td>
       <td>${formatNumber(item.adv20)}</td>
       <td>${Number(item.rsi14).toFixed(2)}</td>
       <td class="${item.nextDayReturn > 0 ? "positive" : item.nextDayReturn < 0 ? "negative" : "neutral"}">${item.nextDayReturn == null ? "Pending" : formatPct(item.nextDayReturn)}</td>
@@ -247,6 +248,10 @@ function renderDetails() {
   el.selectedTitle.textContent = `${item.symbol} - ${item.name}`;
   el.chart.innerHTML = lineChart(state.prices);
   el.details.innerHTML = `
+    <div class="detail-block">
+      <h3>Delivery</h3>
+      <p>Delivery ${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}${item.deliverableQty == null ? "" : `, delivered quantity ${formatNumber(item.deliverableQty)}`}.</p>
+    </div>
     <div class="detail-block">
       <h3>Filter Results</h3>
       <ul>${item.reasons.map((reason) => `<li>${escapeHtml(reason.filter)}: ${reason.passed ? "Pass" : "Fail"} - ${escapeHtml(reason.reason)}</li>`).join("")}</ul>
@@ -277,7 +282,7 @@ async function runRuleScan() {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="7" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -429,4 +434,8 @@ function formatNumber(value) {
 
 function formatPct(value) {
   return `${value > 0 ? "+" : ""}${Number(value).toFixed(2)}%`;
+}
+
+function formatPlainPct(value) {
+  return `${Number(value).toFixed(2)}%`;
 }
