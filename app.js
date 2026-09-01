@@ -34,6 +34,7 @@ const el = {
   capitalInput: document.querySelector("#capitalInput"),
   targetInput: document.querySelector("#targetInput"),
   stopInput: document.querySelector("#stopInput"),
+  maxHoldInput: document.querySelector("#maxHoldInput"),
   backtestButton: document.querySelector("#backtestButton"),
   statusText: document.querySelector("#statusText"),
   pageTitle: document.querySelector("#pageTitle"),
@@ -217,6 +218,7 @@ function renderBacktestControls() {
   if (!el.capitalInput.value) el.capitalInput.value = state.defaultBacktest.capitalPerStock || 10000;
   if (!el.targetInput.value) el.targetInput.value = state.defaultBacktest.targetPct || 5;
   if (!el.stopInput.value) el.stopInput.value = state.defaultBacktest.stopPct || 5;
+  if (!el.maxHoldInput.value) el.maxHoldInput.value = state.defaultBacktest.maxHoldDays || 5;
 }
 
 function renderMetrics() {
@@ -325,7 +327,7 @@ async function runBacktest() {
       capitalPerStock: Number(el.capitalInput.value) || 10000,
       targetPct: Number(el.targetInput.value) || 5,
       stopPct: Number(el.stopInput.value) || 5,
-      maxHoldDays: 5,
+      maxHoldDays: Number(el.maxHoldInput.value) || 5,
     });
     renderBacktest();
   } catch (error) {

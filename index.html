@@ -77,6 +77,9 @@
             <label>Stop %
               <input id="stopInput" type="number" min="0" step="0.5" value="5" />
             </label>
+            <label>Max hold days
+              <input id="maxHoldInput" type="number" min="1" max="30" step="1" value="5" />
+            </label>
           </div>
           <button id="backtestButton" type="button">Backtest rule</button>
           <p id="statusText" class="helper-text">Connecting to SQLite...</p>
