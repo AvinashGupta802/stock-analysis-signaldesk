@@ -3,19 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SignalDesk Rule Lab</title>
+    <title>SignalDesk Rule Builder</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app-shell">
-      <aside class="sidebar" aria-label="Rule lab controls">
+      <aside class="sidebar" aria-label="Rule builder controls">
         <div class="brand">
           <div class="brand-mark">SD</div>
           <div>
             <h1>SignalDesk</h1>
-            <p>NSE buy engine lab</p>
+            <p>NSE buy rule builder</p>
           </div>
         </div>
+
+        <section class="panel compact">
+          <label for="ruleSelect">Saved rule</label>
+          <select id="ruleSelect"></select>
+          <input id="ruleNameInput" type="text" placeholder="Rule name" autocomplete="off" />
+          <div class="button-row">
+            <button id="saveRuleButton" type="button">Save</button>
+            <button id="newRuleButton" type="button">New</button>
+          </div>
+        </section>
 
         <section class="panel compact">
           <label for="groupSelect">Stock group</label>
@@ -32,42 +42,50 @@
           <input id="searchInput" type="search" placeholder="Search symbol or name" autocomplete="off" />
         </section>
 
-        <section class="panel filter-values">
+        <section class="panel rule-config">
           <div class="section-title">
-            <h2>Step 1 Value</h2>
+            <h2>Filter Library</h2>
           </div>
+          <div id="filterLibrary"></div>
+        </section>
+
+        <section class="panel rule-config">
+          <div class="section-title">
+            <h2>Selected Filters</h2>
+          </div>
+          <div id="selectedFilters"></div>
+        </section>
+
+        <section class="panel compact">
+          <label>Backtest setup</label>
           <div class="input-grid two-col">
-            <label>Min price
-              <input id="minPriceInput" type="number" min="0" step="1" value="100" />
+            <label>Top N
+              <input id="topNInput" type="number" min="1" step="1" value="10" />
             </label>
-            <label>Max price
-              <input id="maxPriceInput" type="number" min="0" step="1" value="500" />
+            <label>Capital
+              <input id="capitalInput" type="number" min="0" step="1000" value="10000" />
+            </label>
+            <label>Target %
+              <input id="targetInput" type="number" min="0" step="0.5" value="5" />
+            </label>
+            <label>Stop %
+              <input id="stopInput" type="number" min="0" step="0.5" value="5" />
             </label>
           </div>
-          <button id="runButton" type="button">Run filter</button>
-        </section>
-
-        <section class="panel compact">
-          <label>Data status</label>
+          <button id="backtestButton" type="button">Backtest rule</button>
           <p id="statusText" class="helper-text">Connecting to SQLite...</p>
-        </section>
-
-        <section class="panel compact">
-          <label for="customGroupName">Custom group</label>
-          <input id="customGroupName" type="text" placeholder="Coming back in next step" disabled />
-          <p class="helper-text">Custom groups are preserved in the database. We will re-enable this after the base flow is clean.</p>
         </section>
       </aside>
 
       <section class="workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">One filter at a time</p>
-            <h2>NSE Buy Engine Rule Lab</h2>
+            <p class="eyebrow">Filters become rules</p>
+            <h2 id="pageTitle">NSE Buy Rule Builder</h2>
           </div>
           <div class="market-clock">
-            <span>Current stage</span>
-            <strong>Baseline</strong>
+            <span>Mode</span>
+            <strong>Research</strong>
           </div>
         </header>
 
@@ -76,19 +94,20 @@
         <section class="content-grid">
           <div class="recommendations">
             <div class="section-title">
-              <h2>Eligible Stocks</h2>
+              <h2>Stocks Passing Rule</h2>
               <span id="resultMeta"></span>
             </div>
+            <div id="backtestSummary" class="backtest-summary"></div>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Stock</th>
-                    <th>Status</th>
                     <th>Close</th>
                     <th>Volume</th>
+                    <th>20D ADV</th>
+                    <th>RSI</th>
                     <th>Next day</th>
-                    <th>Reason</th>
                   </tr>
                 </thead>
                 <tbody id="resultsBody"></tbody>
@@ -98,19 +117,9 @@
 
           <aside class="details-panel">
             <div class="section-title">
-              <h2 id="stepName">Step 1</h2>
+              <h2 id="selectedTitle">Rule Meaning</h2>
             </div>
-            <div class="detail-block">
-              <h3>Meaning</h3>
-              <p id="stepMeaning"></p>
-            </div>
-            <div class="detail-block">
-              <h3>Decision</h3>
-              <p id="stepDecision"></p>
-            </div>
-            <div class="section-title">
-              <h2 id="selectedTitle">Stock detail</h2>
-            </div>
+            <div id="ruleMeaning" class="stock-details"></div>
             <div id="chart" class="chart"></div>
             <div id="details" class="stock-details"></div>
           </aside>
@@ -118,6 +127,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=clean-1"></script>
+    <script src="./app.js?v=builder-1"></script>
   </body>
 </html>

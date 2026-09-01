@@ -580,3 +580,46 @@ input[type="search"] {
 .two-col {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+
+.button-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rule-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.rule-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rule-item strong {
+  font-size: 13px;
+}
+
+.rule-item span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.selected-rule {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdf9;
+}
+
+.backtest-summary {
+  margin-bottom: 12px;
+}
+
+.backtest-summary:empty {
+  display: none;
+}

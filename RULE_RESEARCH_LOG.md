@@ -34,14 +34,26 @@ For each item we will record:
 
 ## Active UI
 
-Only `NSE only + Price range` is active in the clean branch.
+The clean branch now has a small filter library and a rule builder.
+
+Available filters:
+
+- Price Range
+- 20D Average Volume
+- RSI 14 Range
+
+Users can create multiple saved rules in the browser by selecting filters and setting values. A rule passes only when all selected filters pass.
 
 Not active yet:
 
-- 20D ADV
-- RSI
 - Relative volume
 - 3-day ROC
 - Near 20D high
 - Close position
 - Any combined score
+
+## Current Limitation
+
+Rules are saved in browser local storage, not SQLite. This is fine for early research, but later we should persist rules in the database so they can be shared across machines/users.
+
+The app can scan a rule interactively. Backtesting is available from the UI, but full-history tests may take around a minute until we add cached indicator tables.

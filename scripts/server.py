@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime
+from collections import defaultdict
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -9,19 +9,48 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "stock_analysis_exchange.sqlite3"
 
-ACTIVE_STEP = {
-    "step": 1,
-    "name": "Price Range Filter",
-    "type": "Universe filter",
-    "status": "Testing",
-    "plainMeaning": "Only keep NSE stocks whose closing price is within the selected minimum and maximum price.",
-    "whyItMatters": "This removes very low-priced stocks and very expensive stocks before we test any buy rule.",
-    "defaultValues": {"minPrice": 100, "maxPrice": 500},
+FILTER_LIBRARY = [
+    {
+        "id": "price_range",
+        "name": "Price Range",
+        "category": "Universe",
+        "meaning": "Keep stocks whose closing price is between a minimum and maximum value.",
+        "fields": [
+            {"key": "minPrice", "label": "Min price", "default": 100, "step": 1},
+            {"key": "maxPrice", "label": "Max price", "default": 500, "step": 1},
+        ],
+    },
+    {
+        "id": "adv20_min",
+        "name": "20D Average Volume",
+        "category": "Liquidity",
+        "meaning": "Keep stocks that have enough average traded quantity over the last 20 trading days.",
+        "fields": [
+            {"key": "minAdv20", "label": "Min 20D ADV", "default": 1_000_000, "step": 10000},
+        ],
+    },
+    {
+        "id": "rsi14_range",
+        "name": "RSI 14 Range",
+        "category": "Momentum Risk",
+        "meaning": "Keep stocks whose RSI shows momentum but is not too overheated.",
+        "fields": [
+            {"key": "rsiMin", "label": "RSI min", "default": 50, "step": 1},
+            {"key": "rsiMax", "label": "RSI max", "default": 68, "step": 1},
+        ],
+    },
+]
+
+DEFAULT_RULE = {
+    "name": "Price Range Only",
+    "filters": [
+        {"id": "price_range", "values": {"minPrice": 100, "maxPrice": 500}},
+    ],
 }
 
 BUILTIN_GROUPS = [
     {"id": "all", "name": "All NSE Stocks", "description": "All imported NSE stocks.", "kind": "system"},
-    {"id": "liquid", "name": "NSE Liquid Stocks", "description": "NSE stocks with current-day volume >= 100,000.", "kind": "system"},
+    {"id": "liquid", "name": "NSE Liquid Stocks", "description": "NSE stocks with latest volume >= 100,000.", "kind": "system"},
 ]
 
 GROUP_SCHEMA = """
@@ -54,19 +83,24 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/bootstrap":
             return self.send_json(get_bootstrap())
-        if parsed.path == "/api/recommendations":
-            return self.send_json(get_recommendations(parse_qs(parsed.query)))
         if parsed.path == "/api/prices":
             return self.send_json(get_prices(parse_qs(parsed.query)))
         return super().do_GET()
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        payload = self.read_payload()
+        if parsed.path == "/api/rule/results":
+            return self.send_json(get_rule_results(payload))
+        if parsed.path == "/api/rule/backtest":
+            return self.send_json(backtest_rule(payload))
         if parsed.path == "/api/groups":
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
             return self.send_json(save_custom_group(payload))
         return self.send_json({"error": "Not found"}, 404)
+
+    def read_payload(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
 
     def send_json(self, payload, status=200):
         body = json.dumps(payload).encode("utf-8")
@@ -120,59 +154,112 @@ def get_bootstrap():
         "stats": dict(stats),
         "dates": list(reversed(dates)),
         "groups": groups,
-        "activeStep": ACTIVE_STEP,
-        "defaults": {"minPrice": 100, "maxPrice": 500},
+        "filterLibrary": FILTER_LIBRARY,
+        "defaultRule": DEFAULT_RULE,
+        "defaultBacktest": {
+            "fromDate": "2024-08-15",
+            "toDate": "2026-08-24",
+            "topN": 10,
+            "capitalPerStock": 10_000,
+            "targetPct": 5,
+            "stopPct": 5,
+            "maxHoldDays": 5,
+        },
     }
 
 
-def get_recommendations(params):
-    group = first(params, "group", "all")
-    trade_date = first(params, "date")
-    search = first(params, "search", "").strip().upper()
-    min_price = number_param(params, "minPrice", 100)
-    max_price = number_param(params, "maxPrice", 500)
-    limit = int(number_param(params, "limit", 200))
-
+def get_rule_results(payload):
+    rule = normalize_rule(payload.get("rule") or DEFAULT_RULE)
+    group = payload.get("group") or "all"
+    trade_date = payload.get("date")
+    search = str(payload.get("search") or "").strip().upper()
+    limit = int(payload.get("limit") or 200)
     rows = []
     with connect() as conn:
         stocks = load_group_stocks(conn, group)
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
-            item = evaluate_price_filter(conn, stock, trade_date, min_price, max_price)
-            if item:
-                rows.append(item)
-
+            result = evaluate_stock_on_date(conn, stock, trade_date, rule)
+            if result["passed"]:
+                rows.append(result)
     rows.sort(key=lambda row: (row["volume"], row["symbol"]), reverse=True)
     return {
-        "group": group,
+        "rule": rule,
         "date": trade_date,
-        "minPrice": min_price,
-        "maxPrice": max_price,
+        "group": group,
         "total": len(rows),
         "results": rows[:limit],
-        "metrics": build_metrics(rows),
-        "explanation": {
-            "name": ACTIVE_STEP["name"],
-            "plainMeaning": ACTIVE_STEP["plainMeaning"],
-            "decision": f"Pass if close is between Rs. {min_price:g} and Rs. {max_price:g}.",
-        },
+        "metrics": build_scan_metrics(rows),
     }
 
 
-def evaluate_price_filter(conn, stock, trade_date, min_price, max_price):
-    current = conn.execute(
+def backtest_rule(payload):
+    rule = normalize_rule(payload.get("rule") or DEFAULT_RULE)
+    group = payload.get("group") or "all"
+    from_date = payload.get("fromDate") or "2024-08-15"
+    to_date = payload.get("toDate") or "2026-08-24"
+    top_n = int(payload.get("topN") or 10)
+    capital = float(payload.get("capitalPerStock") or 10_000)
+    target_pct = float(payload.get("targetPct") or 5)
+    stop_pct = float(payload.get("stopPct") or 5)
+    max_hold_days = int(payload.get("maxHoldDays") or 5)
+
+    picks_by_date = defaultdict(list)
+    rows_by_symbol = {}
+    with connect() as conn:
+        stocks = load_group_stocks(conn, group)
+        for stock in stocks:
+            rows = load_rows(conn, stock["id"])
+            if len(rows) < 30:
+                continue
+            rows_by_symbol[stock["symbol"]] = rows
+            indicators = build_indicators(rows)
+            for index in range(21, len(rows) - max_hold_days - 1):
+                row = rows[index]
+                if row["trade_date"] < from_date or row["trade_date"] > to_date:
+                    continue
+                ctx = build_backtest_context(rows, indicators, index)
+                passed, reasons = apply_rule(ctx, rule)
+                if passed:
+                    picks_by_date[row["trade_date"]].append({
+                        "symbol": stock["symbol"],
+                        "index": index,
+                        "volume": row["volume"],
+                        "close": row["close"],
+                        "reasons": reasons,
+                    })
+
+    trades = simulate_trades(picks_by_date, rows_by_symbol, top_n, capital, target_pct, stop_pct, max_hold_days)
+    return {
+        "rule": rule,
+        "fromDate": from_date,
+        "toDate": to_date,
+        "totalSignals": sum(len(items) for items in picks_by_date.values()),
+        "signalDays": len(picks_by_date),
+        "summary": summarize_trades(trades, capital),
+        "tradesPreview": trades[:25],
+    }
+
+
+def evaluate_stock_on_date(conn, stock, trade_date, rule):
+    rows = conn.execute(
         """
         SELECT trade_date, open, high, low, close, volume
         FROM daily_prices
-        WHERE instrument_id = ? AND trade_date = ?
+        WHERE instrument_id = ? AND trade_date <= ?
+        ORDER BY trade_date DESC
+        LIMIT 80
         """,
         (stock["id"], trade_date),
-    ).fetchone()
-    if not current:
-        return None
-    if current["close"] < min_price or current["close"] > max_price:
-        return None
+    ).fetchall()
+    if len(rows) < 21:
+        return {"passed": False}
+    series = [dict(row) for row in reversed(rows)]
+    if series[-1]["trade_date"] != trade_date:
+        return {"passed": False}
+    ctx = build_context(series, len(series) - 1)
+    passed, reasons = apply_rule(ctx, rule)
     next_row = conn.execute(
         """
         SELECT trade_date, close
@@ -183,29 +270,179 @@ def evaluate_price_filter(conn, stock, trade_date, min_price, max_price):
         """,
         (stock["id"], trade_date),
     ).fetchone()
-    next_return = pct(next_row["close"], current["close"]) if next_row else None
     return {
+        "passed": passed,
         "symbol": stock["symbol"],
-        "name": stock["name"] or stock["symbol"],
-        "exchange": "NSE",
-        "close": current["close"],
-        "volume": current["volume"],
+        "name": stock["name"],
+        "close": ctx["close"],
+        "volume": ctx["volume"],
+        "adv20": ctx["adv20"],
+        "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
         "nextClose": next_row["close"] if next_row else None,
-        "nextDayReturn": next_return,
-        "status": "Eligible",
-        "reason": f"Close Rs. {current['close']:.2f} is inside Rs. {min_price:g}-{max_price:g}.",
+        "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
+        "reasons": reasons,
     }
+
+
+def apply_rule(ctx, rule):
+    reasons = []
+    for selected in rule["filters"]:
+        definition = filter_definition(selected["id"])
+        passed, reason = evaluate_filter(ctx, selected)
+        reasons.append({
+            "filter": definition["name"] if definition else selected["id"],
+            "passed": passed,
+            "reason": reason,
+        })
+        if not passed:
+            return False, reasons
+    return True, reasons
+
+
+def evaluate_filter(ctx, selected):
+    values = selected.get("values") or {}
+    filter_id = selected["id"]
+    if filter_id == "price_range":
+        min_price = float(values.get("minPrice", 100))
+        max_price = float(values.get("maxPrice", 500))
+        passed = min_price <= ctx["close"] <= max_price
+        return passed, f"Close Rs. {ctx['close']:.2f}; required Rs. {min_price:g}-{max_price:g}."
+    if filter_id == "adv20_min":
+        min_adv20 = float(values.get("minAdv20", 1_000_000))
+        passed = ctx["adv20"] >= min_adv20
+        return passed, f"20D ADV {ctx['adv20']:,.0f}; required >= {min_adv20:,.0f}."
+    if filter_id == "rsi14_range":
+        rsi_min = float(values.get("rsiMin", 50))
+        rsi_max = float(values.get("rsiMax", 68))
+        passed = rsi_min <= ctx["rsi14"] <= rsi_max
+        return passed, f"RSI 14 {ctx['rsi14']:.2f}; required {rsi_min:g}-{rsi_max:g}."
+    return False, "Unknown filter."
+
+
+def build_context(rows, index):
+    window = rows[:index + 1]
+    closes = [row["close"] for row in window]
+    volumes = [row["volume"] for row in window]
+    current = rows[index]
+    return {
+        "date": current["trade_date"],
+        "close": current["close"],
+        "volume": current["volume"],
+        "adv20": avg(volumes[-21:-1]),
+        "rsi14": rsi(closes, 14),
+    }
+
+
+def build_indicators(rows):
+    closes = [row["close"] for row in rows]
+    volumes = [row["volume"] for row in rows]
+    adv20 = [0] * len(rows)
+    for index in range(20, len(rows)):
+        adv20[index] = avg(volumes[index - 20:index])
+    return {"adv20": adv20, "rsi14": rsi_series(closes, 14)}
+
+
+def build_backtest_context(rows, indicators, index):
+    current = rows[index]
+    return {
+        "date": current["trade_date"],
+        "close": current["close"],
+        "volume": current["volume"],
+        "adv20": indicators["adv20"][index],
+        "rsi14": indicators["rsi14"][index],
+    }
+
+
+def simulate_trades(picks_by_date, rows_by_symbol, top_n, capital, target_pct, stop_pct, max_hold_days):
+    trades = []
+    for signal_date in sorted(picks_by_date):
+        picks = sorted(picks_by_date[signal_date], key=lambda row: (row["volume"], row["symbol"]), reverse=True)[:top_n]
+        for pick in picks:
+            rows = rows_by_symbol[pick["symbol"]]
+            entry_index = pick["index"] + 1
+            if entry_index >= len(rows):
+                continue
+            entry_row = rows[entry_index]
+            entry_price = entry_row["open"] or entry_row["close"]
+            target_price = entry_price * (1 + target_pct / 100)
+            stop_price = entry_price * (1 - stop_pct / 100)
+            exit_row = rows[min(entry_index + max_hold_days, len(rows) - 1)]
+            exit_price = exit_row["close"]
+            exit_reason = "time"
+            for hold_index in range(entry_index, min(entry_index + max_hold_days, len(rows) - 1) + 1):
+                day = rows[hold_index]
+                if day["low"] <= stop_price:
+                    exit_row = day
+                    exit_price = stop_price
+                    exit_reason = "stop"
+                    break
+                if day["high"] >= target_price:
+                    exit_row = day
+                    exit_price = target_price
+                    exit_reason = "target"
+                    break
+            pnl = (capital / entry_price) * (exit_price - entry_price) if entry_price else 0
+            trades.append({
+                "signalDate": signal_date,
+                "symbol": pick["symbol"],
+                "entryDate": entry_row["trade_date"],
+                "exitDate": exit_row["trade_date"],
+                "exitReason": exit_reason,
+                "entryPrice": entry_price,
+                "exitPrice": exit_price,
+                "returnPct": pct(exit_price, entry_price),
+                "pnl": pnl,
+            })
+    return trades
+
+
+def summarize_trades(trades, capital):
+    invested = len(trades) * capital
+    pnl = sum(trade["pnl"] for trade in trades)
+    return {
+        "trades": len(trades),
+        "investedTurnover": invested,
+        "netPnl": pnl,
+        "returnOnTurnoverPct": (pnl / invested) * 100 if invested else 0,
+        "avgTradeReturnPct": avg([trade["returnPct"] for trade in trades]),
+        "winRatePct": avg([1 if trade["pnl"] > 0 else 0 for trade in trades]) * 100,
+        "targetHitPct": avg([1 if trade["exitReason"] == "target" else 0 for trade in trades]) * 100,
+        "stopHitPct": avg([1 if trade["exitReason"] == "stop" else 0 for trade in trades]) * 100,
+    }
+
+
+def build_scan_metrics(rows):
+    completed = [row for row in rows if row["nextDayReturn"] is not None]
+    return {
+        "passedStocks": len(rows),
+        "avgNextDayMove": avg([row["nextDayReturn"] for row in completed]),
+        "nextDayPositiveRate": avg([1 if row["nextDayReturn"] > 0 else 0 for row in completed]) * 100,
+        "pendingOutcomes": len(rows) - len(completed),
+    }
+
+
+def normalize_rule(rule):
+    filters = []
+    for item in rule.get("filters") or []:
+        definition = filter_definition(item.get("id"))
+        if not definition:
+            continue
+        defaults = {field["key"]: field["default"] for field in definition["fields"]}
+        defaults.update(item.get("values") or {})
+        filters.append({"id": definition["id"], "values": defaults})
+    return {"name": str(rule.get("name") or "Untitled Rule").strip() or "Untitled Rule", "filters": filters}
+
+
+def filter_definition(filter_id):
+    return next((item for item in FILTER_LIBRARY if item["id"] == filter_id), None)
 
 
 def get_prices(params):
     symbol = first(params, "symbol", "").upper()
     date = first(params, "date")
     with connect() as conn:
-        stock = conn.execute(
-            "SELECT id FROM instruments WHERE exchange = 'NSE' AND symbol = ? LIMIT 1",
-            (symbol,),
-        ).fetchone()
+        stock = conn.execute("SELECT id FROM instruments WHERE exchange = 'NSE' AND symbol = ? LIMIT 1", (symbol,)).fetchone()
         if not stock:
             return {"symbol": symbol, "prices": []}
         rows = conn.execute(
@@ -221,14 +458,19 @@ def get_prices(params):
     return {"symbol": symbol, "prices": [dict(row) for row in reversed(rows)]}
 
 
-def build_metrics(rows):
-    completed = [row for row in rows if row["nextDayReturn"] is not None]
-    return {
-        "eligibleStocks": len(rows),
-        "avgNextDayMove": avg([row["nextDayReturn"] for row in completed]),
-        "nextDayPositiveRate": avg([1 if row["nextDayReturn"] > 0 else 0 for row in completed]),
-        "pendingOutcomes": len(rows) - len(completed),
-    }
+def load_rows(conn, instrument_id):
+    return [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT trade_date, open, high, low, close, volume
+            FROM daily_prices
+            WHERE instrument_id = ?
+            ORDER BY trade_date
+            """,
+            (instrument_id,),
+        ).fetchall()
+    ]
 
 
 def load_group_stocks(conn, group):
@@ -238,11 +480,8 @@ def load_group_stocks(conn, group):
             f"""
             SELECT i.id, i.symbol, COALESCE(i.name, i.symbol) AS name
             FROM instruments i
-            JOIN daily_prices latest
-              ON latest.instrument_id = i.id
-             AND latest.trade_date = i.last_trade_date
-            WHERE i.exchange = 'NSE'
-              {volume_clause}
+            JOIN daily_prices latest ON latest.instrument_id = i.id AND latest.trade_date = i.last_trade_date
+            WHERE i.exchange = 'NSE' {volume_clause}
             ORDER BY i.symbol
             """
         ).fetchall()
@@ -291,10 +530,7 @@ def save_custom_group(payload):
             """
             INSERT INTO stock_groups (id, name, description, kind, source, updated_at)
             VALUES (?, ?, ?, 'custom', 'user', CURRENT_TIMESTAMP)
-            ON CONFLICT(id) DO UPDATE SET
-              name = excluded.name,
-              description = excluded.description,
-              updated_at = CURRENT_TIMESTAMP
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, updated_at = CURRENT_TIMESTAMP
             """,
             (group_id, name, f"User watchlist - {len(symbols)} requested symbols"),
         )
@@ -303,22 +539,14 @@ def save_custom_group(payload):
         missing = []
         for symbol in symbols:
             row = conn.execute(
-                """
-                SELECT exchange, symbol, COALESCE(name, symbol) AS name
-                FROM instruments
-                WHERE exchange = 'NSE' AND symbol = ?
-                LIMIT 1
-                """,
+                "SELECT exchange, symbol, COALESCE(name, symbol) AS name FROM instruments WHERE exchange = 'NSE' AND symbol = ? LIMIT 1",
                 (symbol,),
             ).fetchone()
             if not row:
                 missing.append(symbol)
                 continue
             conn.execute(
-                """
-                INSERT OR REPLACE INTO stock_group_members (group_id, exchange, symbol, name)
-                VALUES (?, ?, ?, ?)
-                """,
+                "INSERT OR REPLACE INTO stock_group_members (group_id, exchange, symbol, name) VALUES (?, ?, ?, ?)",
                 (group_id, row["exchange"], row["symbol"], row["name"]),
             )
             added.append(row["symbol"])
@@ -347,16 +575,6 @@ def slugify(value):
     return text.strip("_") or "watchlist"
 
 
-def number_param(params, key, default):
-    raw = first(params, key)
-    if raw is None or raw == "":
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
 def first(params, key, default=None):
     values = params.get(key)
     return values[0] if values else default
@@ -370,9 +588,50 @@ def avg(values):
     return sum(values) / len(values) if values else 0
 
 
+def rsi(values, period=14):
+    if len(values) <= period:
+        return 50
+    gains = []
+    losses = []
+    for index in range(1, period + 1):
+        change = values[index] - values[index - 1]
+        gains.append(max(change, 0))
+        losses.append(abs(min(change, 0)))
+    avg_gain = avg(gains)
+    avg_loss = avg(losses)
+    value = 100 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+    for index in range(period + 1, len(values)):
+        change = values[index] - values[index - 1]
+        avg_gain = ((avg_gain * (period - 1)) + max(change, 0)) / period
+        avg_loss = ((avg_loss * (period - 1)) + abs(min(change, 0))) / period
+        value = 100 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+    return value
+
+
+def rsi_series(values, period=14):
+    out = [50] * len(values)
+    if len(values) <= period:
+        return out
+    gains = []
+    losses = []
+    for index in range(1, period + 1):
+        change = values[index] - values[index - 1]
+        gains.append(max(change, 0))
+        losses.append(abs(min(change, 0)))
+    avg_gain = avg(gains)
+    avg_loss = avg(losses)
+    out[period] = 100 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+    for index in range(period + 1, len(values)):
+        change = values[index] - values[index - 1]
+        avg_gain = ((avg_gain * (period - 1)) + max(change, 0)) / period
+        avg_loss = ((avg_loss * (period - 1)) + abs(min(change, 0))) / period
+        out[index] = 100 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+    return out
+
+
 if __name__ == "__main__":
     port = 8000
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"SignalDesk Rule Lab running at http://127.0.0.1:{port}")
+    print(f"SignalDesk Rule Builder running at http://127.0.0.1:{port}")
     print(f"SQLite DB: {DB_PATH}")
     server.serve_forever()

@@ -1,35 +1,45 @@
+const STORAGE_KEY = "signaldesk.buyRules.v1";
+
 const state = {
-  mode: "loading",
   groups: [],
   dates: [],
   stats: null,
-  activeStep: null,
+  filterLibrary: [],
+  rules: [],
+  activeRuleIndex: 0,
   groupId: "all",
   date: null,
   search: "",
-  minPrice: 100,
-  maxPrice: 500,
   results: [],
-  metrics: null,
+  metrics: {},
   prices: [],
   selectedSymbol: null,
+  backtest: null,
 };
 
 const el = {
+  ruleSelect: document.querySelector("#ruleSelect"),
+  ruleNameInput: document.querySelector("#ruleNameInput"),
+  saveRuleButton: document.querySelector("#saveRuleButton"),
+  newRuleButton: document.querySelector("#newRuleButton"),
   groupSelect: document.querySelector("#groupSelect"),
   dateSelect: document.querySelector("#dateSelect"),
   searchInput: document.querySelector("#searchInput"),
-  minPriceInput: document.querySelector("#minPriceInput"),
-  maxPriceInput: document.querySelector("#maxPriceInput"),
-  runButton: document.querySelector("#runButton"),
+  filterLibrary: document.querySelector("#filterLibrary"),
+  selectedFilters: document.querySelector("#selectedFilters"),
+  topNInput: document.querySelector("#topNInput"),
+  capitalInput: document.querySelector("#capitalInput"),
+  targetInput: document.querySelector("#targetInput"),
+  stopInput: document.querySelector("#stopInput"),
+  backtestButton: document.querySelector("#backtestButton"),
   statusText: document.querySelector("#statusText"),
-  stepName: document.querySelector("#stepName"),
-  stepMeaning: document.querySelector("#stepMeaning"),
-  stepDecision: document.querySelector("#stepDecision"),
+  pageTitle: document.querySelector("#pageTitle"),
   metricsGrid: document.querySelector("#metricsGrid"),
   resultMeta: document.querySelector("#resultMeta"),
+  backtestSummary: document.querySelector("#backtestSummary"),
   resultsBody: document.querySelector("#resultsBody"),
   selectedTitle: document.querySelector("#selectedTitle"),
+  ruleMeaning: document.querySelector("#ruleMeaning"),
   chart: document.querySelector("#chart"),
   details: document.querySelector("#details"),
 };
@@ -37,156 +47,190 @@ const el = {
 init();
 
 async function init() {
-  bindControls();
-  try {
-    const bootstrap = await fetchJson("/api/bootstrap");
-    state.mode = "sqlite";
-    state.groups = bootstrap.groups || [];
-    state.dates = bootstrap.dates || [];
-    state.stats = bootstrap.stats;
-    state.activeStep = bootstrap.activeStep;
-    state.minPrice = bootstrap.defaults?.minPrice ?? state.minPrice;
-    state.maxPrice = bootstrap.defaults?.maxPrice ?? state.maxPrice;
-    state.groupId = state.groups[0]?.id || "all";
-    state.date = state.dates[state.dates.length - 1];
-    renderSelectors();
-    renderInputs();
-    renderStep();
-    await loadResults();
-  } catch (error) {
-    state.mode = "error";
-    el.statusText.textContent = `Could not connect to local SQLite server: ${error.message}`;
-  }
+  bindShell();
+  const bootstrap = await fetchJson("/api/bootstrap");
+  state.groups = bootstrap.groups || [];
+  state.dates = bootstrap.dates || [];
+  state.stats = bootstrap.stats;
+  state.filterLibrary = bootstrap.filterLibrary || [];
+  state.rules = loadSavedRules(bootstrap.defaultRule);
+  state.groupId = state.groups[0]?.id || "all";
+  state.date = state.dates[state.dates.length - 1];
+  renderAll();
+  await runRuleScan();
 }
 
-function bindControls() {
+function bindShell() {
+  el.ruleSelect.addEventListener("change", () => {
+    state.activeRuleIndex = Number(el.ruleSelect.value);
+    state.backtest = null;
+    renderAll();
+    runRuleScan();
+  });
+  el.saveRuleButton.addEventListener("click", () => {
+    currentRule().name = el.ruleNameInput.value.trim() || "Untitled Rule";
+    saveRules();
+    renderAll();
+  });
+  el.newRuleButton.addEventListener("click", () => {
+    state.rules.push({ name: "New Buy Rule", filters: [] });
+    state.activeRuleIndex = state.rules.length - 1;
+    state.backtest = null;
+    saveRules();
+    renderAll();
+    runRuleScan();
+  });
   el.groupSelect.addEventListener("change", () => {
     state.groupId = el.groupSelect.value;
-    state.selectedSymbol = null;
-    loadResults();
+    runRuleScan();
   });
   el.dateSelect.addEventListener("change", () => {
     state.date = el.dateSelect.value;
     state.selectedSymbol = null;
-    loadResults();
+    runRuleScan();
   });
   el.searchInput.addEventListener("input", debounce(() => {
     state.search = el.searchInput.value.trim();
     state.selectedSymbol = null;
-    loadResults();
+    runRuleScan();
   }, 250));
-  [el.minPriceInput, el.maxPriceInput].forEach((input) => {
-    input.addEventListener("input", debounce(() => {
-      state.minPrice = Number(el.minPriceInput.value) || 0;
-      state.maxPrice = Number(el.maxPriceInput.value) || 0;
-      state.selectedSymbol = null;
-      loadResults();
-    }, 300));
-  });
-  el.runButton.addEventListener("click", () => loadResults());
+  el.backtestButton.addEventListener("click", runBacktest);
 }
 
-async function loadResults() {
-  if (!state.date) return;
-  setLoading();
-  const params = new URLSearchParams({
-    group: state.groupId,
-    date: state.date,
-    search: state.search,
-    minPrice: state.minPrice,
-    maxPrice: state.maxPrice,
-    limit: 200,
-  });
-  const payload = await fetchJson(`/api/recommendations?${params.toString()}`);
-  state.results = payload.results || [];
-  state.metrics = payload.metrics || {};
-  state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
-  if (state.selectedSymbol) {
-    const pricePayload = await fetchJson(`/api/prices?symbol=${encodeURIComponent(state.selectedSymbol)}&date=${encodeURIComponent(state.date)}`);
-    state.prices = pricePayload.prices || [];
-  } else {
-    state.prices = [];
-  }
-  render();
-}
-
-async function selectStock(symbol) {
-  state.selectedSymbol = symbol;
-  const pricePayload = await fetchJson(`/api/prices?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(state.date)}`);
-  state.prices = pricePayload.prices || [];
-  render();
-}
-
-function render() {
+function renderAll() {
+  renderRuleSelect();
+  renderSelectors();
+  renderFilterLibrary();
+  renderSelectedFilters();
+  renderRuleMeaning();
   renderStatus();
   renderMetrics();
   renderTable();
   renderDetails();
+  renderBacktest();
+}
+
+function renderRuleSelect() {
+  el.ruleSelect.innerHTML = state.rules.map((rule, index) => `<option value="${index}">${escapeHtml(rule.name)}</option>`).join("");
+  el.ruleSelect.value = state.activeRuleIndex;
+  el.ruleNameInput.value = currentRule().name;
+  el.pageTitle.textContent = currentRule().name;
 }
 
 function renderSelectors() {
-  el.groupSelect.innerHTML = state.groups.map((group) => {
-    return `<option value="${escapeHtml(group.id)}" title="${escapeHtml(group.description || "")}">${escapeHtml(group.name)}</option>`;
-  }).join("");
+  el.groupSelect.innerHTML = state.groups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>`).join("");
   el.groupSelect.value = state.groupId;
   el.dateSelect.innerHTML = state.dates.map((date) => `<option value="${date}">${formatDate(date)}</option>`).join("");
   el.dateSelect.value = state.date;
 }
 
-function renderInputs() {
-  el.minPriceInput.value = state.minPrice;
-  el.maxPriceInput.value = state.maxPrice;
+function renderFilterLibrary() {
+  el.filterLibrary.innerHTML = state.filterLibrary.map((filter) => `
+    <div class="rule-item">
+      <strong>${escapeHtml(filter.name)}</strong>
+      <span>${escapeHtml(filter.category)}: ${escapeHtml(filter.meaning)}</span>
+      <button type="button" data-add-filter="${escapeHtml(filter.id)}">Add filter</button>
+    </div>
+  `).join("");
+  el.filterLibrary.querySelectorAll("button[data-add-filter]").forEach((button) => {
+    button.addEventListener("click", () => addFilter(button.dataset.addFilter));
+  });
 }
 
-function renderStep() {
-  const step = state.activeStep || {};
-  el.stepName.textContent = `Step ${step.step || 1}: ${step.name || "Price Range Filter"}`;
-  el.stepMeaning.textContent = step.plainMeaning || "";
-  el.stepDecision.textContent = `Current test: pass stocks closing between Rs. ${state.minPrice} and Rs. ${state.maxPrice}.`;
+function renderSelectedFilters() {
+  const rule = currentRule();
+  if (!rule.filters.length) {
+    el.selectedFilters.innerHTML = `<div class="empty-state">No filters selected. Add one filter to make this rule testable.</div>`;
+    return;
+  }
+  el.selectedFilters.innerHTML = rule.filters.map((selected, index) => {
+    const definition = filterDefinition(selected.id);
+    const fields = (definition?.fields || []).map((field) => `
+      <label>${escapeHtml(field.label)}
+        <input type="number" step="${field.step}" value="${selected.values[field.key]}" data-filter-index="${index}" data-field-key="${escapeHtml(field.key)}" />
+      </label>
+    `).join("");
+    return `
+      <div class="rule-item selected-rule">
+        <strong>${escapeHtml(definition?.name || selected.id)}</strong>
+        <span>${escapeHtml(definition?.meaning || "")}</span>
+        <div class="input-grid two-col">${fields}</div>
+        <button type="button" data-remove-filter="${index}">Remove</button>
+      </div>
+    `;
+  }).join("");
+  el.selectedFilters.querySelectorAll("input[data-filter-index]").forEach((input) => {
+    input.addEventListener("input", debounce(() => {
+      const filter = currentRule().filters[Number(input.dataset.filterIndex)];
+      filter.values[input.dataset.fieldKey] = Number(input.value) || 0;
+      saveRules();
+      runRuleScan();
+      renderRuleMeaning();
+    }, 300));
+  });
+  el.selectedFilters.querySelectorAll("button[data-remove-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      currentRule().filters.splice(Number(button.dataset.removeFilter), 1);
+      state.backtest = null;
+      saveRules();
+      renderAll();
+      runRuleScan();
+    });
+  });
+}
+
+function renderRuleMeaning() {
+  const rule = currentRule();
+  if (!rule.filters.length) {
+    el.ruleMeaning.innerHTML = `<div class="empty-state">This rule has no filters yet.</div>`;
+    return;
+  }
+  el.ruleMeaning.innerHTML = `
+    <div class="detail-block">
+      <h3>Rule Logic</h3>
+      <p>A stock passes only when all selected filters pass.</p>
+      <ul>
+        ${rule.filters.map((selected) => {
+          const definition = filterDefinition(selected.id);
+          return `<li><strong>${escapeHtml(definition?.name || selected.id)}:</strong> ${escapeHtml(humanValues(selected))}</li>`;
+        }).join("")}
+      </ul>
+    </div>
+  `;
 }
 
 function renderStatus() {
   el.statusText.textContent = state.stats
     ? `SQLite connected: ${formatNumber(state.stats.stock_count)} NSE stocks, ${formatNumber(state.stats.price_count)} EOD rows.`
     : "SQLite connected.";
-  renderStep();
 }
 
 function renderMetrics() {
-  const metrics = state.metrics || {};
   const rows = [
-    ["Eligible stocks", metrics.eligibleStocks ?? 0],
-    ["Avg next-day move", formatPct(metrics.avgNextDayMove ?? 0)],
-    ["Next-day positive", formatPct((metrics.nextDayPositiveRate ?? 0) * 100)],
-    ["Pending outcomes", metrics.pendingOutcomes ?? 0],
+    ["Passed stocks", state.metrics.passedStocks ?? 0],
+    ["Avg next-day", formatPct(state.metrics.avgNextDayMove ?? 0)],
+    ["Next-day positive", formatPct(state.metrics.nextDayPositiveRate ?? 0)],
+    ["Pending", state.metrics.pendingOutcomes ?? 0],
   ];
-  el.metricsGrid.innerHTML = rows.map(([label, value]) => `
-    <div class="metric">
-      <span>${label}</span>
-      <strong>${value}</strong>
-    </div>
-  `).join("");
+  el.metricsGrid.innerHTML = rows.map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
 }
 
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">No NSE stocks passed this price range.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">No stocks passed this rule.</td></tr>`;
     return;
   }
-  el.resultsBody.innerHTML = state.results.map((item) => {
-    const nextClass = item.nextDayReturn > 0 ? "positive" : item.nextDayReturn < 0 ? "negative" : "neutral";
-    return `
-      <tr class="${item.symbol === state.selectedSymbol ? "active" : ""}" data-symbol="${escapeHtml(item.symbol)}">
-        <td class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name || item.symbol)}</span></td>
-        <td>${escapeHtml(item.status)}</td>
-        <td>Rs. ${formatMoney(item.close)}</td>
-        <td>${formatNumber(item.volume)}</td>
-        <td class="${nextClass}">${item.nextDayReturn == null ? "Pending" : formatPct(item.nextDayReturn)}</td>
-        <td>${escapeHtml(item.reason)}</td>
-      </tr>
-    `;
-  }).join("");
+  el.resultsBody.innerHTML = state.results.map((item) => `
+    <tr class="${item.symbol === state.selectedSymbol ? "active" : ""}" data-symbol="${escapeHtml(item.symbol)}">
+      <td class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name)}</span></td>
+      <td>Rs. ${formatMoney(item.close)}</td>
+      <td>${formatNumber(item.volume)}</td>
+      <td>${formatNumber(item.adv20)}</td>
+      <td>${Number(item.rsi14).toFixed(2)}</td>
+      <td class="${item.nextDayReturn > 0 ? "positive" : item.nextDayReturn < 0 ? "negative" : "neutral"}">${item.nextDayReturn == null ? "Pending" : formatPct(item.nextDayReturn)}</td>
+    </tr>
+  `).join("");
   el.resultsBody.querySelectorAll("tr[data-symbol]").forEach((row) => {
     row.addEventListener("click", () => selectStock(row.dataset.symbol));
   });
@@ -197,33 +241,142 @@ function renderDetails() {
   if (!item) {
     el.selectedTitle.textContent = "Stock detail";
     el.chart.innerHTML = "";
-    el.details.innerHTML = `<div class="empty-state">Select a stock to inspect price history.</div>`;
+    el.details.innerHTML = `<div class="empty-state">Select a stock to see why it passed.</div>`;
     return;
   }
-  el.selectedTitle.textContent = `${item.symbol} - ${item.name || item.symbol}`;
+  el.selectedTitle.textContent = `${item.symbol} - ${item.name}`;
   el.chart.innerHTML = lineChart(state.prices);
-  const nextClose = item.nextClose == null ? "Pending" : `Rs. ${formatMoney(item.nextClose)} (${formatPct(item.nextDayReturn)})`;
   el.details.innerHTML = `
     <div class="detail-block">
-      <h3>Why It Passed</h3>
-      <ul>
-        <li>${escapeHtml(item.reason)}</li>
-        <li>This is not a buy recommendation yet. It is only Step 1 universe filtering.</li>
-      </ul>
-    </div>
-    <div class="detail-block">
-      <h3>Outcome Check</h3>
-      <ul>
-        <li>Signal date close: Rs. ${formatMoney(item.close)}</li>
-        <li>Next trading date: ${formatDate(item.nextDate)}</li>
-        <li>Next close: ${nextClose}</li>
-      </ul>
+      <h3>Filter Results</h3>
+      <ul>${item.reasons.map((reason) => `<li>${escapeHtml(reason.filter)}: ${reason.passed ? "Pass" : "Fail"} - ${escapeHtml(reason.reason)}</li>`).join("")}</ul>
     </div>
   `;
 }
 
-function setLoading() {
-  el.resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">Applying price range filter...</td></tr>`;
+function renderBacktest() {
+  if (!state.backtest) {
+    el.backtestSummary.innerHTML = "";
+    return;
+  }
+  const summary = state.backtest.summary;
+  el.backtestSummary.innerHTML = `
+    <div class="detail-block">
+      <h3>Backtest Result</h3>
+      <p>${formatNumber(summary.trades)} trades, P/L Rs. ${formatMoney(summary.netPnl)}, return on turnover ${formatPct(summary.returnOnTurnoverPct)}.</p>
+      <p>Win ${formatPct(summary.winRatePct)}, target hit ${formatPct(summary.targetHitPct)}, stop hit ${formatPct(summary.stopHitPct)}.</p>
+    </div>
+  `;
+}
+
+async function runRuleScan() {
+  const payload = {
+    rule: currentRule(),
+    group: state.groupId,
+    date: state.date,
+    search: state.search,
+    limit: 200,
+  };
+  el.resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">Running rule...</td></tr>`;
+  const result = await postJson("/api/rule/results", payload);
+  state.results = result.results || [];
+  state.metrics = result.metrics || {};
+  state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
+  if (state.selectedSymbol) {
+    const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(state.selectedSymbol)}&date=${encodeURIComponent(state.date)}`);
+    state.prices = prices.prices || [];
+  } else {
+    state.prices = [];
+  }
+  renderAll();
+}
+
+async function runBacktest() {
+  el.backtestButton.disabled = true;
+  el.backtestButton.textContent = "Backtesting...";
+  try {
+    state.backtest = await postJson("/api/rule/backtest", {
+      rule: currentRule(),
+      group: state.groupId,
+      fromDate: "2024-08-15",
+      toDate: "2026-08-24",
+      topN: Number(el.topNInput.value) || 10,
+      capitalPerStock: Number(el.capitalInput.value) || 10000,
+      targetPct: Number(el.targetInput.value) || 5,
+      stopPct: Number(el.stopInput.value) || 5,
+      maxHoldDays: 5,
+    });
+    renderBacktest();
+  } finally {
+    el.backtestButton.disabled = false;
+    el.backtestButton.textContent = "Backtest rule";
+  }
+}
+
+async function selectStock(symbol) {
+  state.selectedSymbol = symbol;
+  const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(state.date)}`);
+  state.prices = prices.prices || [];
+  renderTable();
+  renderDetails();
+}
+
+function addFilter(filterId) {
+  const definition = filterDefinition(filterId);
+  if (!definition) return;
+  const values = Object.fromEntries(definition.fields.map((field) => [field.key, field.default]));
+  currentRule().filters.push({ id: filterId, values });
+  state.backtest = null;
+  saveRules();
+  renderAll();
+  runRuleScan();
+}
+
+function currentRule() {
+  return state.rules[state.activeRuleIndex] || state.rules[0];
+}
+
+function filterDefinition(filterId) {
+  return state.filterLibrary.find((filter) => filter.id === filterId);
+}
+
+function humanValues(selected) {
+  const values = selected.values || {};
+  if (selected.id === "price_range") return `Close between Rs. ${values.minPrice} and Rs. ${values.maxPrice}`;
+  if (selected.id === "adv20_min") return `20D average volume at least ${formatNumber(values.minAdv20)}`;
+  if (selected.id === "rsi14_range") return `RSI 14 between ${values.rsiMin} and ${values.rsiMax}`;
+  return JSON.stringify(values);
+}
+
+function loadSavedRules(defaultRule) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    if (Array.isArray(saved) && saved.length) return saved;
+  } catch (error) {
+    console.warn("Could not load saved rules", error);
+  }
+  return [defaultRule];
+}
+
+function saveRules() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.rules));
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json();
+}
+
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
+  return data;
 }
 
 function lineChart(series) {
@@ -246,25 +399,7 @@ function lineChart(series) {
     <path d="${path}" fill="none" stroke="#255f91" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
     <circle cx="${last[0]}" cy="${last[1]}" r="6" fill="#17211b" />
     <text x="${padding}" y="24" fill="#637064" font-size="13">Last ${series.length} closes</text>
-    <text x="${width - padding}" y="${height - 8}" fill="#637064" font-size="12" text-anchor="end">${formatDate(series[series.length - 1].date)}</text>
   </svg>`;
-}
-
-async function fetchJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return response.json();
-}
-
-async function postJson(url, payload) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
-  return data;
 }
 
 function debounce(fn, delay) {
