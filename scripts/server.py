@@ -30,6 +30,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "relative_volume",
+        "name": "Volume vs 20D Avg",
+        "category": "Participation",
+        "meaning": "Keep stocks whose current day volume is higher or lower than their normal 20-day average volume.",
+        "fields": [
+            {"key": "minRelativeVolume", "label": "Min relative volume", "default": 1.5, "step": 0.1},
+            {"key": "maxRelativeVolume", "label": "Max relative volume", "default": 999, "step": 0.1},
+        ],
+    },
+    {
         "id": "rsi14_range",
         "name": "RSI 14 Range",
         "category": "Momentum Risk",
@@ -288,6 +298,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "deliverableQty": ctx["deliverable_qty"],
         "deliveryPct": ctx["delivery_pct"],
         "adv20": ctx["adv20"],
+        "relativeVolume": ctx["relative_volume"],
         "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
         "nextClose": next_row["close"] if next_row else None,
@@ -323,6 +334,11 @@ def evaluate_filter(ctx, selected):
         min_adv20 = float(values.get("minAdv20", 1_000_000))
         passed = ctx["adv20"] >= min_adv20
         return passed, f"20D ADV {ctx['adv20']:,.0f}; required >= {min_adv20:,.0f}."
+    if filter_id == "relative_volume":
+        min_relative_volume = float(values.get("minRelativeVolume", 1.5))
+        max_relative_volume = float(values.get("maxRelativeVolume", 999))
+        passed = min_relative_volume <= ctx["relative_volume"] <= max_relative_volume
+        return passed, f"Relative volume {ctx['relative_volume']:.2f}x; required {min_relative_volume:g}x-{max_relative_volume:g}x."
     if filter_id == "rsi14_range":
         rsi_min = float(values.get("rsiMin", 50))
         rsi_max = float(values.get("rsiMax", 68))
@@ -343,6 +359,7 @@ def build_context(rows, index):
         "deliverable_qty": current.get("deliverable_qty"),
         "delivery_pct": current.get("delivery_pct"),
         "adv20": avg(volumes[-21:-1]),
+        "relative_volume": relative_to_avg(current["volume"], avg(volumes[-21:-1])),
         "rsi14": rsi(closes, 14),
     }
 
@@ -353,7 +370,10 @@ def build_indicators(rows):
     adv20 = [0] * len(rows)
     for index in range(20, len(rows)):
         adv20[index] = avg(volumes[index - 20:index])
-    return {"adv20": adv20, "rsi14": rsi_series(closes, 14)}
+    relative_volume = [0] * len(rows)
+    for index in range(len(rows)):
+        relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
+    return {"adv20": adv20, "relative_volume": relative_volume, "rsi14": rsi_series(closes, 14)}
 
 
 def build_backtest_context(rows, indicators, index):
@@ -363,6 +383,7 @@ def build_backtest_context(rows, indicators, index):
         "close": current["close"],
         "volume": current["volume"],
         "adv20": indicators["adv20"][index],
+        "relative_volume": indicators["relative_volume"][index],
         "rsi14": indicators["rsi14"][index],
     }
 
@@ -599,6 +620,10 @@ def pct(value, base):
 
 def avg(values):
     return sum(values) / len(values) if values else 0
+
+
+def relative_to_avg(value, average):
+    return (value / average) if average else 0
 
 
 def rsi(values, period=14):

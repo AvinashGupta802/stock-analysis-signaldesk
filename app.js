@@ -218,7 +218,7 @@ function renderMetrics() {
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="7" class="empty-state">No stocks passed this rule.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="8" class="empty-state">No stocks passed this rule.</td></tr>`;
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
@@ -226,6 +226,7 @@ function renderTable() {
       <td class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name)}</span></td>
       <td>Rs. ${formatMoney(item.close)}</td>
       <td>${formatNumber(item.volume)}</td>
+      <td>${Number(item.relativeVolume || 0).toFixed(2)}x</td>
       <td>${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}</td>
       <td>${formatNumber(item.adv20)}</td>
       <td>${Number(item.rsi14).toFixed(2)}</td>
@@ -251,6 +252,7 @@ function renderDetails() {
     <div class="detail-block">
       <h3>Delivery</h3>
       <p>Delivery ${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}${item.deliverableQty == null ? "" : `, delivered quantity ${formatNumber(item.deliverableQty)}`}.</p>
+      <p>Volume is ${Number(item.relativeVolume || 0).toFixed(2)}x of its 20-day average.</p>
     </div>
     <div class="detail-block">
       <h3>Filter Results</h3>
@@ -282,7 +284,7 @@ async function runRuleScan() {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="7" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="8" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -349,6 +351,7 @@ function humanValues(selected) {
   const values = selected.values || {};
   if (selected.id === "price_range") return `Close between Rs. ${values.minPrice} and Rs. ${values.maxPrice}`;
   if (selected.id === "adv20_min") return `20D average volume at least ${formatNumber(values.minAdv20)}`;
+  if (selected.id === "relative_volume") return `Today volume between ${values.minRelativeVolume}x and ${values.maxRelativeVolume}x of 20D average volume`;
   if (selected.id === "rsi14_range") return `RSI 14 between ${values.rsiMin} and ${values.rsiMax}`;
   return JSON.stringify(values);
 }
