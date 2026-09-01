@@ -15,6 +15,7 @@ const state = {
   prices: [],
   selectedSymbol: null,
   backtest: null,
+  defaultBacktest: null,
 };
 
 const el = {
@@ -27,6 +28,8 @@ const el = {
   searchInput: document.querySelector("#searchInput"),
   filterLibrary: document.querySelector("#filterLibrary"),
   selectedFilters: document.querySelector("#selectedFilters"),
+  fromDateInput: document.querySelector("#fromDateInput"),
+  toDateInput: document.querySelector("#toDateInput"),
   topNInput: document.querySelector("#topNInput"),
   capitalInput: document.querySelector("#capitalInput"),
   targetInput: document.querySelector("#targetInput"),
@@ -53,6 +56,7 @@ async function init() {
   state.dates = bootstrap.dates || [];
   state.stats = bootstrap.stats;
   state.filterLibrary = bootstrap.filterLibrary || [];
+  state.defaultBacktest = bootstrap.defaultBacktest || {};
   state.rules = loadSavedRules(bootstrap.defaultRule);
   state.groupId = state.groups[0]?.id || "all";
   state.date = state.dates[state.dates.length - 1];
@@ -104,6 +108,7 @@ function renderAll() {
   renderSelectedFilters();
   renderRuleMeaning();
   renderStatus();
+  renderBacktestControls();
   renderMetrics();
   renderTable();
   renderDetails();
@@ -203,6 +208,15 @@ function renderStatus() {
   el.statusText.textContent = state.stats
     ? `SQLite connected: ${formatNumber(state.stats.stock_count)} NSE stocks, ${formatNumber(state.stats.price_count)} EOD rows, ${formatNumber(state.stats.delivery_count || 0)} delivery rows.`
     : "SQLite connected.";
+}
+
+function renderBacktestControls() {
+  if (!el.fromDateInput.value) el.fromDateInput.value = state.defaultBacktest.fromDate || state.dates[0] || "";
+  if (!el.toDateInput.value) el.toDateInput.value = state.defaultBacktest.toDate || state.dates[state.dates.length - 1] || "";
+  if (!el.topNInput.value) el.topNInput.value = state.defaultBacktest.topN || 10;
+  if (!el.capitalInput.value) el.capitalInput.value = state.defaultBacktest.capitalPerStock || 10000;
+  if (!el.targetInput.value) el.targetInput.value = state.defaultBacktest.targetPct || 5;
+  if (!el.stopInput.value) el.stopInput.value = state.defaultBacktest.stopPct || 5;
 }
 
 function renderMetrics() {
@@ -305,8 +319,8 @@ async function runBacktest() {
     state.backtest = await postJson("/api/rule/backtest", {
       rule: currentRule(),
       group: state.groupId,
-      fromDate: "2024-08-15",
-      toDate: "2026-08-24",
+      fromDate: el.fromDateInput.value || state.defaultBacktest.fromDate,
+      toDate: el.toDateInput.value || state.defaultBacktest.toDate,
       topN: Number(el.topNInput.value) || 10,
       capitalPerStock: Number(el.capitalInput.value) || 10000,
       targetPct: Number(el.targetInput.value) || 5,
@@ -314,6 +328,8 @@ async function runBacktest() {
       maxHoldDays: 5,
     });
     renderBacktest();
+  } catch (error) {
+    el.backtestSummary.innerHTML = `<div class="detail-block error"><h3>Backtest Error</h3><p>${escapeHtml(error.message)}</p></div>`;
   } finally {
     el.backtestButton.disabled = false;
     el.backtestButton.textContent = "Backtest rule";

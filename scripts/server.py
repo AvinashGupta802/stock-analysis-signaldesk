@@ -113,7 +113,10 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/rule/results":
             return self.send_json(get_rule_results(payload))
         if parsed.path == "/api/rule/backtest":
-            return self.send_json(backtest_rule(payload))
+            try:
+                return self.send_json(backtest_rule(payload))
+            except Exception as exc:
+                return self.send_json({"error": str(exc)}, 500)
         if parsed.path == "/api/groups":
             return self.send_json(save_custom_group(payload))
         return self.send_json({"error": "Not found"}, 404)
@@ -141,6 +144,14 @@ def connect():
 def get_bootstrap():
     with connect() as conn:
         ensure_group_schema(conn)
+        delivery_window = conn.execute(
+            """
+            SELECT MIN(d.trade_date) AS first_date, MAX(d.trade_date) AS last_date
+            FROM daily_delivery d
+            JOIN instruments i ON i.id = d.instrument_id
+            WHERE i.exchange = 'NSE' AND i.series = 'EQ'
+            """
+        ).fetchone()
         stats = conn.execute(
             """
             SELECT
@@ -181,8 +192,8 @@ def get_bootstrap():
         "filterLibrary": FILTER_LIBRARY,
         "defaultRule": DEFAULT_RULE,
         "defaultBacktest": {
-            "fromDate": "2024-08-15",
-            "toDate": "2026-08-24",
+            "fromDate": delivery_window["first_date"] or "2024-08-15",
+            "toDate": delivery_window["last_date"] or "2026-08-24",
             "topN": 10,
             "capitalPerStock": 10_000,
             "targetPct": 5,
@@ -399,6 +410,8 @@ def build_backtest_context(rows, indicators, index):
         "date": current["trade_date"],
         "close": current["close"],
         "volume": current["volume"],
+        "deliverable_qty": current.get("deliverable_qty"),
+        "delivery_pct": current.get("delivery_pct"),
         "adv20": indicators["adv20"][index],
         "relative_volume": indicators["relative_volume"][index],
         "rsi14": indicators["rsi14"][index],
@@ -514,10 +527,15 @@ def load_rows(conn, instrument_id):
         dict(row)
         for row in conn.execute(
             """
-            SELECT trade_date, open, high, low, close, volume
-            FROM daily_prices
-            WHERE instrument_id = ?
-            ORDER BY trade_date
+            SELECT
+              p.trade_date, p.open, p.high, p.low, p.close, p.volume,
+              d.deliverable_qty, d.delivery_pct
+            FROM daily_prices p
+            LEFT JOIN daily_delivery d
+              ON d.instrument_id = p.instrument_id
+             AND d.trade_date = p.trade_date
+            WHERE p.instrument_id = ?
+            ORDER BY p.trade_date
             """,
             (instrument_id,),
         ).fetchall()
@@ -532,7 +550,7 @@ def load_group_stocks(conn, group):
             SELECT i.id, i.symbol, COALESCE(i.name, i.symbol) AS name
             FROM instruments i
             JOIN daily_prices latest ON latest.instrument_id = i.id AND latest.trade_date = i.last_trade_date
-            WHERE i.exchange = 'NSE' {volume_clause}
+            WHERE i.exchange = 'NSE' AND i.series = 'EQ' {volume_clause}
             ORDER BY i.symbol
             """
         ).fetchall()
