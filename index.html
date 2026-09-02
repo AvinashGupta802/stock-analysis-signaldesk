@@ -13,12 +13,12 @@
           <div class="brand-mark">SD</div>
           <div>
             <h1>SignalDesk</h1>
-            <p>NSE buy rule builder</p>
+            <p>NSE recommendation builder</p>
           </div>
         </div>
 
         <section class="panel compact">
-          <label for="ruleSelect">Saved rule</label>
+          <label for="ruleSelect">Single rule</label>
           <select id="ruleSelect"></select>
           <input id="ruleNameInput" type="text" placeholder="Rule name" autocomplete="off" />
           <div class="button-row">
@@ -28,16 +28,16 @@
         </section>
 
         <section class="panel compact">
-          <label for="ruleGroupSelect">Rule group</label>
+          <label for="ruleGroupSelect">Recommendation group</label>
           <select id="ruleGroupSelect"></select>
-          <input id="ruleGroupNameInput" type="text" placeholder="Rule group name" autocomplete="off" />
+          <input id="ruleGroupNameInput" type="text" placeholder="Recommendation group name" autocomplete="off" />
           <label>Min matching rules
             <input id="minRuleMatchesInput" type="number" min="1" step="1" value="1" />
           </label>
           <div id="ruleGroupMembers" class="check-list"></div>
           <div class="button-row">
-            <button id="saveRuleGroupButton" type="button">Save group</button>
-            <button id="newRuleGroupButton" type="button">New group</button>
+            <button id="saveRuleGroupButton" type="button">Save rec group</button>
+            <button id="newRuleGroupButton" type="button">New rec group</button>
           </div>
         </section>
 
@@ -95,7 +95,7 @@
               <input id="maxHoldInput" type="number" min="1" max="30" step="1" value="5" />
             </label>
           </div>
-          <button id="backtestButton" type="button">Backtest rule</button>
+          <button id="backtestButton" type="button">Backtest selection</button>
           <p id="statusText" class="helper-text">Connecting to SQLite...</p>
         </section>
       </aside>
@@ -103,8 +103,8 @@
       <section class="workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Filters become rules</p>
-            <h2 id="pageTitle">NSE Buy Rule Builder</h2>
+            <p class="eyebrow">Rules become recommendations</p>
+            <h2 id="pageTitle">NSE Recommendation Builder</h2>
           </div>
           <div class="market-clock">
             <span>Mode</span>
@@ -117,7 +117,7 @@
         <section class="content-grid">
           <div class="recommendations">
             <div class="section-title">
-              <h2>Stocks Passing Rule</h2>
+              <h2>Stocks Passing Selection</h2>
               <span id="resultMeta"></span>
             </div>
             <div id="backtestSummary" class="backtest-summary"></div>
@@ -161,6 +161,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-11"></script>
+    <script src="./app.js?v=builder-12"></script>
   </body>
 </html>

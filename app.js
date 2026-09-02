@@ -271,7 +271,7 @@ function renderRuleMeaning() {
     el.ruleMeaning.innerHTML = `
       <div class="detail-block">
         <h3>Recommendation Group</h3>
-        <p>A stock appears when at least ${group.minMatches || 1} selected rules pass.</p>
+        <p>A stock appears when at least ${group.minMatches || 1} selected rules pass. More matching rules means stronger agreement.</p>
         <ul>
           ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${formatNumber(item.filters.length)} filters</li>`).join("")}
         </ul>
@@ -464,7 +464,7 @@ async function runBacktest() {
     el.backtestSummary.innerHTML = `<div class="detail-block error"><h3>Backtest Error</h3><p>${escapeHtml(error.message)}</p></div>`;
   } finally {
     el.backtestButton.disabled = false;
-    el.backtestButton.textContent = "Backtest rule";
+    el.backtestButton.textContent = "Backtest selection";
   }
 }
 
