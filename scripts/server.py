@@ -60,6 +60,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "obv_accumulation_3d",
+        "name": "OBV Accumulation 3D",
+        "category": "Volume Accumulation",
+        "meaning": "Keep stocks where OBV is rising while price has stayed within a 3-day consolidation range.",
+        "fields": [
+            {"key": "minObv3D", "label": "Min OBV/20D ADV", "default": 1, "step": 0.1},
+            {"key": "maxAbsMomentum3D", "label": "Max 3D price move %", "default": 2, "step": 0.5},
+        ],
+    },
+    {
         "id": "rsi14_range",
         "name": "RSI 14 Range",
         "category": "Momentum Risk",
@@ -331,6 +341,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "adv20": ctx["adv20"],
         "relativeVolume": ctx["relative_volume"],
         "momentum3D": ctx["momentum_3d"],
+        "obv3D": ctx["obv_3d"],
         "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
         "nextClose": next_row["close"] if next_row else None,
@@ -383,6 +394,11 @@ def evaluate_filter(ctx, selected):
         max_momentum = float(values.get("maxMomentum3D", 12))
         passed = min_momentum <= ctx["momentum_3d"] <= max_momentum
         return passed, f"3D price change {ctx['momentum_3d']:+.2f}%; required {min_momentum:g}%-{max_momentum:g}%."
+    if filter_id == "obv_accumulation_3d":
+        min_obv = float(values.get("minObv3D", 1))
+        max_abs_momentum = float(values.get("maxAbsMomentum3D", 2))
+        passed = ctx["obv_3d"] >= min_obv and abs(ctx["momentum_3d"]) <= max_abs_momentum
+        return passed, f"OBV change {ctx['obv_3d']:.2f}x 20D ADV and 3D price move {ctx['momentum_3d']:+.2f}%; required OBV >= {min_obv:g}x and price move within +/-{max_abs_momentum:g}%."
     if filter_id == "rsi14_range":
         rsi_min = float(values.get("rsiMin", 50))
         rsi_max = float(values.get("rsiMax", 68))
@@ -396,15 +412,18 @@ def build_context(rows, index):
     closes = [row["close"] for row in window]
     volumes = [row["volume"] for row in window]
     current = rows[index]
+    adv20 = avg(volumes[-21:-1])
+    obv = obv_series(closes, volumes)
     return {
         "date": current["trade_date"],
         "close": current["close"],
         "volume": current["volume"],
         "deliverable_qty": current.get("deliverable_qty"),
         "delivery_pct": current.get("delivery_pct"),
-        "adv20": avg(volumes[-21:-1]),
-        "relative_volume": relative_to_avg(current["volume"], avg(volumes[-21:-1])),
+        "adv20": adv20,
+        "relative_volume": relative_to_avg(current["volume"], adv20),
         "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
+        "obv_3d": relative_to_avg(obv[-1] - obv[-4], adv20) if len(obv) >= 4 else 0,
         "rsi14": rsi(closes, 14),
     }
 
@@ -412,6 +431,7 @@ def build_context(rows, index):
 def build_indicators(rows):
     closes = [row["close"] for row in rows]
     volumes = [row["volume"] for row in rows]
+    obv = obv_series(closes, volumes)
     adv20 = [0] * len(rows)
     for index in range(20, len(rows)):
         adv20[index] = avg(volumes[index - 20:index])
@@ -419,9 +439,11 @@ def build_indicators(rows):
     for index in range(len(rows)):
         relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
     momentum_3d = [0] * len(rows)
+    obv_3d = [0] * len(rows)
     for index in range(3, len(rows)):
         momentum_3d[index] = pct(closes[index], closes[index - 3])
-    return {"adv20": adv20, "relative_volume": relative_volume, "momentum_3d": momentum_3d, "rsi14": rsi_series(closes, 14)}
+        obv_3d[index] = relative_to_avg(obv[index] - obv[index - 3], adv20[index])
+    return {"adv20": adv20, "relative_volume": relative_volume, "momentum_3d": momentum_3d, "obv_3d": obv_3d, "rsi14": rsi_series(closes, 14)}
 
 
 def build_backtest_context(rows, indicators, index):
@@ -435,6 +457,7 @@ def build_backtest_context(rows, indicators, index):
         "adv20": indicators["adv20"][index],
         "relative_volume": indicators["relative_volume"][index],
         "momentum_3d": indicators["momentum_3d"][index],
+        "obv_3d": indicators["obv_3d"][index],
         "rsi14": indicators["rsi14"][index],
     }
 
@@ -720,6 +743,18 @@ def rsi_series(values, period=14):
         avg_gain = ((avg_gain * (period - 1)) + max(change, 0)) / period
         avg_loss = ((avg_loss * (period - 1)) + abs(min(change, 0))) / period
         out[index] = 100 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+    return out
+
+
+def obv_series(closes, volumes):
+    out = [0] * len(closes)
+    for index in range(1, len(closes)):
+        if closes[index] > closes[index - 1]:
+            out[index] = out[index - 1] + volumes[index]
+        elif closes[index] < closes[index - 1]:
+            out[index] = out[index - 1] - volumes[index]
+        else:
+            out[index] = out[index - 1]
     return out
 
 
