@@ -389,7 +389,7 @@ function renderMetrics() {
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="17" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="18" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
@@ -403,6 +403,7 @@ function renderTable() {
       <td>${Number(item.relativeDelivery || 0).toFixed(2)}x</td>
       <td class="${item.momentum3D > 0 ? "positive" : item.momentum3D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum3D || 0)}</td>
       <td>${formatPlainPct(item.closePositionDay || 0)}</td>
+      <td>${formatPlainPct(item.compression10D || 0)}</td>
       <td>${formatPct(item.distanceFrom20DHigh || 0)}</td>
       <td>${formatPlainPct(item.rangePosition52W || 0)}</td>
       <td>${Number(item.obv3D || 0).toFixed(2)}x</td>
@@ -444,6 +445,7 @@ function renderDetails() {
       <p>20-day rupee liquidity is Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr.</p>
       <p>3-day price change is ${formatPct(item.momentum3D || 0)}.</p>
       <p>Close position in today's range is ${formatPlainPct(item.closePositionDay || 0)}.</p>
+      <p>10-day range compression is ${formatPlainPct(item.compression10D || 0)}. Lower values mean the stock has been moving in a tighter range.</p>
       <p>Close is ${formatPct(item.distanceFrom20DHigh || 0)} from 20D high Rs. ${formatMoney(item.high20D || 0)}.</p>
       <p>52W position is ${formatPlainPct(item.rangePosition52W || 0)} between low Rs. ${formatMoney(item.low52W || 0)} and high Rs. ${formatMoney(item.high52W || 0)}.</p>
       <p>EMA trend: close Rs. ${formatMoney(item.close)}, EMA9 Rs. ${formatMoney(item.ema9 || 0)}, EMA20 Rs. ${formatMoney(item.ema20 || 0)}, SMA50 Rs. ${formatMoney(item.sma50 || 0)}.</p>
@@ -485,7 +487,7 @@ async function runRuleScan() {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="17" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="18" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -581,7 +583,7 @@ async function runRuleGroupScan() {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="17" class="empty-state">Running rule group...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="18" class="empty-state">Running rule group...</td></tr>`;
   const result = await postJson("/api/rule-group/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -628,6 +630,7 @@ function humanValues(selected) {
   if (selected.id === "range_position_52w") return `Close position between ${values.minRangePosition52W}% and ${values.maxRangePosition52W}% of 52-week range`;
   if (selected.id === "close_near_20d_high") return `Close within ${values.maxDistanceFrom20DHigh}% below the 20-day high`;
   if (selected.id === "close_position_day_range") return `Close position between ${values.minClosePositionDay}% and ${values.maxClosePositionDay}% of today's high-low range`;
+  if (selected.id === "range_compression_10d") return `10-day high-low range between ${values.minCompression10D}% and ${values.maxCompression10D}% of close`;
   if (selected.id === "rupee_liquidity") return `20D average traded value between Rs. ${values.minRupeeLiquidityCr} cr and Rs. ${values.maxRupeeLiquidityCr} cr`;
   if (selected.id === "ema_trend") return `At least ${values.minEmaTrendChecks} of 3 trend checks pass: close above EMA9, close above EMA20, EMA20 above SMA50`;
   if (selected.id === "atr_risk") return `ATR 14 between ${values.minAtrPct}% and ${values.maxAtrPct}% of close`;
@@ -741,6 +744,7 @@ function starterRules(defaultRule) {
       name: "OBV Consolidation Breakout",
       filters: [
         { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        { id: "range_compression_10d", values: { minCompression10D: 0, maxCompression10D: 12 } },
         { id: "obv_accumulation_3d", values: { minObv3D: 0.5, maxAbsMomentum3D: 2 } },
         { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
       ],

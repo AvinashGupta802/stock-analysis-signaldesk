@@ -99,6 +99,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "range_compression_10d",
+        "name": "10D Range Compression",
+        "category": "Setup Quality",
+        "meaning": "Keep stocks that have moved within a narrow high-low range over the last 10 trading days before a possible expansion.",
+        "fields": [
+            {"key": "minCompression10D", "label": "Min 10D compression %", "default": 0, "step": 0.5},
+            {"key": "maxCompression10D", "label": "Max 10D compression %", "default": 12, "step": 0.5},
+        ],
+    },
+    {
         "id": "rupee_liquidity",
         "name": "Rupee Liquidity",
         "category": "Liquidity",
@@ -509,6 +519,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "high20D": ctx["high_20d"],
         "distanceFrom20DHigh": ctx["distance_from_20d_high"],
         "closePositionDay": ctx["close_position_day"],
+        "compression10D": ctx["compression_10d"],
         "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
         "ema9": ctx["ema9"],
         "ema20": ctx["ema20"],
@@ -585,6 +596,7 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
         "high20D": ctx["high_20d"],
         "distanceFrom20DHigh": ctx["distance_from_20d_high"],
         "closePositionDay": ctx["close_position_day"],
+        "compression10D": ctx["compression_10d"],
         "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
         "ema9": ctx["ema9"],
         "ema20": ctx["ema20"],
@@ -671,6 +683,11 @@ def evaluate_filter(ctx, selected):
         max_position = float(values.get("maxClosePositionDay", 100))
         passed = min_position <= ctx["close_position_day"] <= max_position
         return passed, f"Close position {ctx['close_position_day']:.2f}% of day range; required {min_position:g}%-{max_position:g}%."
+    if filter_id == "range_compression_10d":
+        min_compression = float(values.get("minCompression10D", 0))
+        max_compression = float(values.get("maxCompression10D", 12))
+        passed = min_compression <= ctx["compression_10d"] <= max_compression
+        return passed, f"10D range compression {ctx['compression_10d']:.2f}%; required {min_compression:g}%-{max_compression:g}%."
     if filter_id == "rupee_liquidity":
         min_liquidity = float(values.get("minRupeeLiquidityCr", 20))
         max_liquidity = float(values.get("maxRupeeLiquidityCr", 999999))
@@ -715,6 +732,8 @@ def build_context(rows, index):
     adv20 = avg(volumes[-21:-1])
     avg_delivery_20 = avg_available(delivery_quantities[-21:-1])
     high_20d = max(row["high"] for row in rows[max(0, index - 19):index + 1])
+    range_10d = rows[max(0, index - 9):index + 1]
+    compression_10d = ((max(row["high"] for row in range_10d) - min(row["low"] for row in range_10d)) / current["close"]) * 100 if current["close"] else 0
     range_window = rows[max(0, index - 251):index + 1]
     high_52w = max(row["high"] for row in range_window)
     low_52w = min(row["low"] for row in range_window)
@@ -737,6 +756,7 @@ def build_context(rows, index):
         "high_20d": high_20d,
         "distance_from_20d_high": pct(current["close"], high_20d),
         "close_position_day": range_position(current["close"], current["low"], current["high"]),
+        "compression_10d": compression_10d,
         "rupee_liquidity_cr": (current["close"] * adv20) / 10_000_000,
         "ema9": ema9,
         "ema20": ema20,
@@ -769,6 +789,7 @@ def build_indicators(rows):
     relative_delivery = [0] * len(rows)
     sma50 = [0] * len(rows)
     close_position_day = [50] * len(rows)
+    compression_10d = [0] * len(rows)
     rupee_liquidity_cr = [0] * len(rows)
     atr_pct = [0] * len(rows)
     for index in range(len(rows)):
@@ -777,6 +798,7 @@ def build_indicators(rows):
         relative_delivery[index] = relative_to_avg(delivery_quantities[index], avg_delivery_20[index])
         sma50[index] = avg(closes[max(0, index - 49):index + 1])
         close_position_day[index] = range_position(closes[index], lows[index], highs[index])
+        compression_10d[index] = ((max(highs[max(0, index - 9):index + 1]) - min(lows[max(0, index - 9):index + 1])) / closes[index]) * 100 if closes[index] else 0
         rupee_liquidity_cr[index] = (closes[index] * adv20[index]) / 10_000_000
         atr_pct[index] = pct(closes[index] + atr14[index], closes[index])
     momentum_3d = [0] * len(rows)
@@ -805,6 +827,7 @@ def build_indicators(rows):
         "high_20d": high_20d,
         "distance_from_20d_high": distance_from_20d_high,
         "close_position_day": close_position_day,
+        "compression_10d": compression_10d,
         "rupee_liquidity_cr": rupee_liquidity_cr,
         "ema9": ema9,
         "ema20": ema20,
@@ -835,6 +858,7 @@ def build_backtest_context(rows, indicators, index):
         "high_20d": indicators["high_20d"][index],
         "distance_from_20d_high": indicators["distance_from_20d_high"][index],
         "close_position_day": indicators["close_position_day"][index],
+        "compression_10d": indicators["compression_10d"][index],
         "rupee_liquidity_cr": indicators["rupee_liquidity_cr"][index],
         "ema9": indicators["ema9"][index],
         "ema20": indicators["ema20"][index],
