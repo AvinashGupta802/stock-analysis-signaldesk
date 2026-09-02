@@ -80,6 +80,15 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "close_near_20d_high",
+        "name": "Close Near 20D High",
+        "category": "Breakout",
+        "meaning": "Keep stocks whose close is within a chosen percentage below their 20-day high.",
+        "fields": [
+            {"key": "maxDistanceFrom20DHigh", "label": "Max distance below 20D high %", "default": 2, "step": 0.5},
+        ],
+    },
+    {
         "id": "obv_accumulation_3d",
         "name": "OBV Accumulation 3D",
         "category": "Volume Accumulation",
@@ -366,6 +375,8 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "high52W": ctx["high_52w"],
         "low52W": ctx["low_52w"],
         "rangePosition52W": ctx["range_position_52w"],
+        "high20D": ctx["high_20d"],
+        "distanceFrom20DHigh": ctx["distance_from_20d_high"],
         "obv3D": ctx["obv_3d"],
         "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
@@ -431,6 +442,11 @@ def evaluate_filter(ctx, selected):
         max_range_position = float(values.get("maxRangePosition52W", 100))
         passed = min_range_position <= ctx["range_position_52w"] <= max_range_position
         return passed, f"52W range position {ctx['range_position_52w']:.2f}%; required {min_range_position:g}%-{max_range_position:g}%."
+    if filter_id == "close_near_20d_high":
+        max_distance = float(values.get("maxDistanceFrom20DHigh", 2))
+        distance_below_high = abs(min(ctx["distance_from_20d_high"], 0))
+        passed = ctx["distance_from_20d_high"] <= 0 and distance_below_high <= max_distance
+        return passed, f"Close is {distance_below_high:.2f}% below 20D high; required <= {max_distance:g}%."
     if filter_id == "obv_accumulation_3d":
         min_obv = float(values.get("minObv3D", 1))
         max_abs_momentum = float(values.get("maxAbsMomentum3D", 2))
@@ -454,6 +470,7 @@ def build_context(rows, index):
     current = rows[index]
     adv20 = avg(volumes[-21:-1])
     avg_delivery_20 = avg_available(delivery_quantities[-21:-1])
+    high_20d = max(row["high"] for row in rows[max(0, index - 19):index + 1])
     range_window = rows[max(0, index - 251):index + 1]
     high_52w = max(row["high"] for row in range_window)
     low_52w = min(row["low"] for row in range_window)
@@ -469,6 +486,8 @@ def build_context(rows, index):
         "adv20": adv20,
         "relative_volume": relative_to_avg(current["volume"], adv20),
         "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
+        "high_20d": high_20d,
+        "distance_from_20d_high": pct(current["close"], high_20d),
         "high_52w": high_52w,
         "low_52w": low_52w,
         "range_position_52w": range_position(current["close"], low_52w, high_52w),
@@ -498,8 +517,12 @@ def build_indicators(rows):
     high_52w = [0] * len(rows)
     low_52w = [0] * len(rows)
     range_position_52w = [50] * len(rows)
+    high_20d = [0] * len(rows)
+    distance_from_20d_high = [0] * len(rows)
     obv_3d = [0] * len(rows)
     for index in range(len(rows)):
+        high_20d[index] = max(highs[max(0, index - 19):index + 1])
+        distance_from_20d_high[index] = pct(closes[index], high_20d[index])
         start = max(0, index - 251)
         high_52w[index] = max(highs[start:index + 1])
         low_52w[index] = min(lows[start:index + 1])
@@ -513,6 +536,8 @@ def build_indicators(rows):
         "avg_delivery_20": avg_delivery_20,
         "relative_delivery": relative_delivery,
         "momentum_3d": momentum_3d,
+        "high_20d": high_20d,
+        "distance_from_20d_high": distance_from_20d_high,
         "high_52w": high_52w,
         "low_52w": low_52w,
         "range_position_52w": range_position_52w,
@@ -534,6 +559,8 @@ def build_backtest_context(rows, indicators, index):
         "adv20": indicators["adv20"][index],
         "relative_volume": indicators["relative_volume"][index],
         "momentum_3d": indicators["momentum_3d"][index],
+        "high_20d": indicators["high_20d"][index],
+        "distance_from_20d_high": indicators["distance_from_20d_high"][index],
         "high_52w": indicators["high_52w"][index],
         "low_52w": indicators["low_52w"][index],
         "range_position_52w": indicators["range_position_52w"][index],
