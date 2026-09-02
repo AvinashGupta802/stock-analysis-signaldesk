@@ -200,9 +200,16 @@ class Handler(SimpleHTTPRequestHandler):
         payload = self.read_payload()
         if parsed.path == "/api/rule/results":
             return self.send_json(get_rule_results(payload))
+        if parsed.path == "/api/rule-group/results":
+            return self.send_json(get_rule_group_results(payload))
         if parsed.path == "/api/rule/backtest":
             try:
                 return self.send_json(backtest_rule(payload))
+            except Exception as exc:
+                return self.send_json({"error": str(exc)}, 500)
+        if parsed.path == "/api/rule-group/backtest":
+            try:
+                return self.send_json(backtest_rule_group(payload))
             except Exception as exc:
                 return self.send_json({"error": str(exc)}, 500)
         if parsed.path == "/api/groups":
@@ -317,6 +324,35 @@ def get_rule_results(payload):
     }
 
 
+def get_rule_group_results(payload):
+    rules = normalize_rules(payload.get("rules") or [DEFAULT_RULE])
+    group = payload.get("group") or "all"
+    trade_date = payload.get("date")
+    search = str(payload.get("search") or "").strip().upper()
+    limit = int(payload.get("limit") or 200)
+    min_matches = int(payload.get("minMatches") or len(rules) or 1)
+    min_matches = max(1, min(min_matches, len(rules) or 1))
+    rows = []
+    with connect() as conn:
+        stocks = load_group_stocks(conn, group)
+        for stock in stocks:
+            if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
+                continue
+            result = evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches)
+            if result["passed"]:
+                rows.append(result)
+    rows.sort(key=lambda row: (row["matchCount"], row["volume"], row["symbol"]), reverse=True)
+    return {
+        "rules": rules,
+        "date": trade_date,
+        "group": group,
+        "minMatches": min_matches,
+        "total": len(rows),
+        "results": rows[:limit],
+        "metrics": build_scan_metrics(rows),
+    }
+
+
 def backtest_rule(payload):
     rule = normalize_rule(payload.get("rule") or DEFAULT_RULE)
     group = payload.get("group") or "all"
@@ -358,6 +394,62 @@ def backtest_rule(payload):
         "rule": rule,
         "fromDate": from_date,
         "toDate": to_date,
+        "totalSignals": sum(len(items) for items in picks_by_date.values()),
+        "signalDays": len(picks_by_date),
+        "summary": summarize_trades(trades, capital),
+        "tradesPreview": trades[:25],
+    }
+
+
+def backtest_rule_group(payload):
+    rules = normalize_rules(payload.get("rules") or [DEFAULT_RULE])
+    group = payload.get("group") or "all"
+    from_date = payload.get("fromDate") or "2024-08-15"
+    to_date = payload.get("toDate") or "2026-08-24"
+    top_n = int(payload.get("topN") or 10)
+    capital = float(payload.get("capitalPerStock") or 10_000)
+    target_pct = float(payload.get("targetPct") or 5)
+    stop_pct = float(payload.get("stopPct") or 5)
+    max_hold_days = int(payload.get("maxHoldDays") or 5)
+    min_matches = int(payload.get("minMatches") or len(rules) or 1)
+    min_matches = max(1, min(min_matches, len(rules) or 1))
+
+    picks_by_date = defaultdict(list)
+    rows_by_symbol = {}
+    with connect() as conn:
+        stocks = load_group_stocks(conn, group)
+        for stock in stocks:
+            rows = load_rows(conn, stock["id"])
+            if len(rows) < 30:
+                continue
+            rows_by_symbol[stock["symbol"]] = rows
+            indicators = build_indicators(rows)
+            for index in range(21, len(rows) - max_hold_days - 1):
+                row = rows[index]
+                if row["trade_date"] < from_date or row["trade_date"] > to_date:
+                    continue
+                ctx = build_backtest_context(rows, indicators, index)
+                matched_rules = []
+                for rule in rules:
+                    passed, reasons = apply_rule(ctx, rule)
+                    if passed:
+                        matched_rules.append({"name": rule["name"], "reasons": reasons})
+                if len(matched_rules) >= min_matches:
+                    picks_by_date[row["trade_date"]].append({
+                        "symbol": stock["symbol"],
+                        "index": index,
+                        "volume": row["volume"],
+                        "close": row["close"],
+                        "matchCount": len(matched_rules),
+                        "matchedRules": matched_rules,
+                    })
+
+    trades = simulate_trades(picks_by_date, rows_by_symbol, top_n, capital, target_pct, stop_pct, max_hold_days)
+    return {
+        "rules": rules,
+        "fromDate": from_date,
+        "toDate": to_date,
+        "minMatches": min_matches,
         "totalSignals": sum(len(items) for items in picks_by_date.values()),
         "signalDays": len(picks_by_date),
         "summary": summarize_trades(trades, capital),
@@ -429,6 +521,87 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "nextClose": next_row["close"] if next_row else None,
         "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
         "reasons": reasons,
+    }
+
+
+def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
+    rows = conn.execute(
+        """
+        SELECT
+          p.trade_date, p.open, p.high, p.low, p.close, p.volume,
+          d.deliverable_qty, d.delivery_pct
+        FROM daily_prices p
+        LEFT JOIN daily_delivery d
+          ON d.instrument_id = p.instrument_id
+         AND d.trade_date = p.trade_date
+        WHERE p.instrument_id = ? AND p.trade_date <= ?
+        ORDER BY p.trade_date DESC
+        LIMIT 280
+        """,
+        (stock["id"], trade_date),
+    ).fetchall()
+    if len(rows) < 21:
+        return {"passed": False}
+    series = [dict(row) for row in reversed(rows)]
+    if series[-1]["trade_date"] != trade_date:
+        return {"passed": False}
+    ctx = build_context(series, len(series) - 1)
+    matched_rules = []
+    failed_rules = []
+    for rule in rules:
+        passed, reasons = apply_rule(ctx, rule)
+        rule_result = {"name": rule["name"], "reasons": reasons}
+        if passed:
+            matched_rules.append(rule_result)
+        else:
+            failed_rules.append(rule_result)
+    passed = len(matched_rules) >= min_matches
+    next_row = conn.execute(
+        """
+        SELECT trade_date, close
+        FROM daily_prices
+        WHERE instrument_id = ? AND trade_date > ?
+        ORDER BY trade_date
+        LIMIT 1
+        """,
+        (stock["id"], trade_date),
+    ).fetchone()
+    return {
+        "passed": passed,
+        "symbol": stock["symbol"],
+        "name": stock["name"],
+        "close": ctx["close"],
+        "volume": ctx["volume"],
+        "deliverableQty": ctx["deliverable_qty"],
+        "deliveryPct": ctx["delivery_pct"],
+        "avgDelivery20": ctx["avg_delivery_20"],
+        "relativeDelivery": ctx["relative_delivery"],
+        "adv20": ctx["adv20"],
+        "relativeVolume": ctx["relative_volume"],
+        "momentum3D": ctx["momentum_3d"],
+        "high52W": ctx["high_52w"],
+        "low52W": ctx["low_52w"],
+        "rangePosition52W": ctx["range_position_52w"],
+        "high20D": ctx["high_20d"],
+        "distanceFrom20DHigh": ctx["distance_from_20d_high"],
+        "closePositionDay": ctx["close_position_day"],
+        "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
+        "ema9": ctx["ema9"],
+        "ema20": ctx["ema20"],
+        "sma50": ctx["sma50"],
+        "atr14": ctx["atr14"],
+        "atrPct": ctx["atr_pct"],
+        "obv3D": ctx["obv_3d"],
+        "rsi14": ctx["rsi14"],
+        "nextDate": next_row["trade_date"] if next_row else None,
+        "nextClose": next_row["close"] if next_row else None,
+        "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
+        "reasons": matched_rules[0]["reasons"] if matched_rules else [],
+        "matchCount": len(matched_rules),
+        "totalRules": len(rules),
+        "minMatches": min_matches,
+        "matchedRules": matched_rules,
+        "failedRules": failed_rules,
     }
 
 
@@ -679,7 +852,7 @@ def build_backtest_context(rows, indicators, index):
 def simulate_trades(picks_by_date, rows_by_symbol, top_n, capital, target_pct, stop_pct, max_hold_days):
     trades = []
     for signal_date in sorted(picks_by_date):
-        picks = sorted(picks_by_date[signal_date], key=lambda row: (row["volume"], row["symbol"]), reverse=True)[:top_n]
+        picks = sorted(picks_by_date[signal_date], key=lambda row: (row.get("matchCount", 1), row["volume"], row["symbol"]), reverse=True)[:top_n]
         for pick in picks:
             rows = rows_by_symbol[pick["symbol"]]
             entry_index = pick["index"] + 1
@@ -754,6 +927,11 @@ def normalize_rule(rule):
         defaults.update(item.get("values") or {})
         filters.append({"id": definition["id"], "values": defaults})
     return {"name": str(rule.get("name") or "Untitled Rule").strip() or "Untitled Rule", "filters": filters}
+
+
+def normalize_rules(rules):
+    normalized = [normalize_rule(rule) for rule in rules if isinstance(rule, dict)]
+    return [rule for rule in normalized if rule["filters"]]
 
 
 def filter_definition(filter_id):

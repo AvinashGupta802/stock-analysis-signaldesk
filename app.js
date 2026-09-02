@@ -1,4 +1,5 @@
 const STORAGE_KEY = "signaldesk.buyRules.v1";
+const RULE_GROUP_STORAGE_KEY = "signaldesk.ruleGroups.v1";
 
 const state = {
   groups: [],
@@ -6,7 +7,10 @@ const state = {
   stats: null,
   filterLibrary: [],
   rules: [],
+  ruleGroups: [],
   activeRuleIndex: 0,
+  activeRuleGroupIndex: 0,
+  mode: "rule",
   groupId: "all",
   date: null,
   search: "",
@@ -23,6 +27,12 @@ const el = {
   ruleNameInput: document.querySelector("#ruleNameInput"),
   saveRuleButton: document.querySelector("#saveRuleButton"),
   newRuleButton: document.querySelector("#newRuleButton"),
+  ruleGroupSelect: document.querySelector("#ruleGroupSelect"),
+  ruleGroupNameInput: document.querySelector("#ruleGroupNameInput"),
+  minRuleMatchesInput: document.querySelector("#minRuleMatchesInput"),
+  ruleGroupMembers: document.querySelector("#ruleGroupMembers"),
+  saveRuleGroupButton: document.querySelector("#saveRuleGroupButton"),
+  newRuleGroupButton: document.querySelector("#newRuleGroupButton"),
   groupSelect: document.querySelector("#groupSelect"),
   dateSelect: document.querySelector("#dateSelect"),
   searchInput: document.querySelector("#searchInput"),
@@ -59,51 +69,87 @@ async function init() {
   state.filterLibrary = bootstrap.filterLibrary || [];
   state.defaultBacktest = bootstrap.defaultBacktest || {};
   state.rules = loadSavedRules(bootstrap.defaultRule);
+  state.ruleGroups = loadSavedRuleGroups();
   state.groupId = state.groups[0]?.id || "all";
   state.date = state.dates[state.dates.length - 1];
   renderAll();
-  await runRuleScan();
+  await runScan();
 }
 
 function bindShell() {
   el.ruleSelect.addEventListener("change", () => {
     state.activeRuleIndex = Number(el.ruleSelect.value);
+    state.mode = "rule";
     state.backtest = null;
     renderAll();
-    runRuleScan();
+    runScan();
   });
   el.saveRuleButton.addEventListener("click", () => {
     currentRule().name = el.ruleNameInput.value.trim() || "Untitled Rule";
     saveRules();
+    syncRuleGroupsWithRules();
     renderAll();
   });
   el.newRuleButton.addEventListener("click", () => {
-    state.rules.push({ name: "New Buy Rule", filters: [] });
+    state.rules.push({ id: createId("rule"), name: "New Buy Rule", filters: [] });
     state.activeRuleIndex = state.rules.length - 1;
+    state.mode = "rule";
     state.backtest = null;
     saveRules();
+    syncRuleGroupsWithRules();
     renderAll();
-    runRuleScan();
+    runScan();
+  });
+  el.ruleGroupSelect.addEventListener("change", () => {
+    state.activeRuleGroupIndex = Number(el.ruleGroupSelect.value);
+    state.mode = "group";
+    state.backtest = null;
+    renderAll();
+    runScan();
+  });
+  el.saveRuleGroupButton.addEventListener("click", () => {
+    saveCurrentRuleGroupFromUi();
+    state.mode = "group";
+    saveRuleGroups();
+    renderAll();
+    runScan();
+  });
+  el.newRuleGroupButton.addEventListener("click", () => {
+    const rule = currentRule();
+    state.ruleGroups.push({
+      id: createId("group"),
+      name: "New Rule Group",
+      minMatches: 1,
+      ruleIds: rule ? [rule.id] : [],
+    });
+    state.activeRuleGroupIndex = state.ruleGroups.length - 1;
+    state.mode = "group";
+    state.backtest = null;
+    saveRuleGroups();
+    renderAll();
+    runScan();
   });
   el.groupSelect.addEventListener("change", () => {
     state.groupId = el.groupSelect.value;
-    runRuleScan();
+    runScan();
   });
   el.dateSelect.addEventListener("change", () => {
     state.date = el.dateSelect.value;
     state.selectedSymbol = null;
-    runRuleScan();
+    runScan();
   });
   el.searchInput.addEventListener("input", debounce(() => {
     state.search = el.searchInput.value.trim();
     state.selectedSymbol = null;
-    runRuleScan();
+    runScan();
   }, 250));
   el.backtestButton.addEventListener("click", runBacktest);
 }
 
 function renderAll() {
   renderRuleSelect();
+  renderRuleGroupSelect();
+  renderRuleGroupMembers();
   renderSelectors();
   renderFilterLibrary();
   renderSelectedFilters();
@@ -120,7 +166,39 @@ function renderRuleSelect() {
   el.ruleSelect.innerHTML = state.rules.map((rule, index) => `<option value="${index}">${escapeHtml(rule.name)}</option>`).join("");
   el.ruleSelect.value = state.activeRuleIndex;
   el.ruleNameInput.value = currentRule().name;
-  el.pageTitle.textContent = currentRule().name;
+  el.pageTitle.textContent = state.mode === "group" ? currentRuleGroup().name : currentRule().name;
+}
+
+function renderRuleGroupSelect() {
+  el.ruleGroupSelect.innerHTML = state.ruleGroups.map((group, index) => `<option value="${index}">${escapeHtml(group.name)}</option>`).join("");
+  el.ruleGroupSelect.value = state.activeRuleGroupIndex;
+  const group = currentRuleGroup();
+  el.ruleGroupNameInput.value = group.name;
+  el.minRuleMatchesInput.max = Math.max(1, group.ruleIds.length);
+  el.minRuleMatchesInput.value = group.minMatches || Math.max(1, group.ruleIds.length);
+}
+
+function renderRuleGroupMembers() {
+  const group = currentRuleGroup();
+  el.ruleGroupMembers.innerHTML = state.rules.map((rule) => `
+    <label class="check-item">
+      <input type="checkbox" data-rule-group-member="${escapeHtml(rule.id)}" ${group.ruleIds.includes(rule.id) ? "checked" : ""} />
+      <span>
+        <strong>${escapeHtml(rule.name)}</strong>
+        <small>${formatNumber(rule.filters.length)} filters</small>
+      </span>
+    </label>
+  `).join("");
+  el.ruleGroupMembers.querySelectorAll("input[data-rule-group-member]").forEach((input) => {
+    input.addEventListener("change", () => {
+      saveCurrentRuleGroupFromUi();
+      saveRuleGroups();
+      renderRuleGroupSelect();
+      state.mode = "group";
+      state.backtest = null;
+      runScan();
+    });
+  });
 }
 
 function renderSelectors() {
@@ -170,7 +248,7 @@ function renderSelectedFilters() {
       const filter = currentRule().filters[Number(input.dataset.filterIndex)];
       filter.values[input.dataset.fieldKey] = Number(input.value) || 0;
       saveRules();
-      runRuleScan();
+      runScan();
       renderRuleMeaning();
     }, 300));
   });
@@ -180,13 +258,27 @@ function renderSelectedFilters() {
       state.backtest = null;
       saveRules();
       renderAll();
-      runRuleScan();
+      runScan();
     });
   });
 }
 
 function renderRuleMeaning() {
   const rule = currentRule();
+  const group = currentRuleGroup();
+  if (state.mode === "group") {
+    const selectedRules = rulesForCurrentGroup();
+    el.ruleMeaning.innerHTML = `
+      <div class="detail-block">
+        <h3>Recommendation Group</h3>
+        <p>A stock appears when at least ${group.minMatches || 1} selected rules pass.</p>
+        <ul>
+          ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${formatNumber(item.filters.length)} filters</li>`).join("")}
+        </ul>
+      </div>
+    `;
+    return;
+  }
   if (!rule.filters.length) {
     el.ruleMeaning.innerHTML = `<div class="empty-state">This rule has no filters yet.</div>`;
     return;
@@ -234,12 +326,13 @@ function renderMetrics() {
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="16" class="empty-state">No stocks passed this rule.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="17" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
     <tr class="${item.symbol === state.selectedSymbol ? "active" : ""}" data-symbol="${escapeHtml(item.symbol)}">
       <td class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name)}</span></td>
+      <td>${item.totalRules ? `${item.matchCount}/${item.totalRules}` : "-"}</td>
       <td>Rs. ${formatMoney(item.close)}</td>
       <td>${formatNumber(item.volume)}</td>
       <td>${Number(item.relativeVolume || 0).toFixed(2)}x</td>
@@ -273,6 +366,13 @@ function renderDetails() {
   el.selectedTitle.textContent = `${item.symbol} - ${item.name}`;
   el.chart.innerHTML = lineChart(state.prices);
   el.details.innerHTML = `
+    ${item.totalRules ? `
+      <div class="detail-block">
+        <h3>Rule Group Match</h3>
+        <p>${item.matchCount} of ${item.totalRules} rules passed. Minimum required: ${item.minMatches}.</p>
+        <ul>${(item.matchedRules || []).map((rule) => `<li>${escapeHtml(rule.name)}</li>`).join("")}</ul>
+      </div>
+    ` : ""}
     <div class="detail-block">
       <h3>Delivery</h3>
       <p>Delivery ${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}${item.deliverableQty == null ? "" : `, delivered quantity ${formatNumber(item.deliverableQty)}`}.</p>
@@ -309,6 +409,11 @@ function renderBacktest() {
   `;
 }
 
+async function runScan() {
+  if (state.mode === "group") return runRuleGroupScan();
+  return runRuleScan();
+}
+
 async function runRuleScan() {
   const payload = {
     rule: currentRule(),
@@ -317,7 +422,7 @@ async function runRuleScan() {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="16" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="17" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -335,8 +440,8 @@ async function runBacktest() {
   el.backtestButton.disabled = true;
   el.backtestButton.textContent = "Backtesting...";
   try {
-    state.backtest = await postJson("/api/rule/backtest", {
-      rule: currentRule(),
+    const isGroupMode = state.mode === "group";
+    const payload = {
       group: state.groupId,
       fromDate: el.fromDateInput.value || state.defaultBacktest.fromDate,
       toDate: el.toDateInput.value || state.defaultBacktest.toDate,
@@ -345,7 +450,15 @@ async function runBacktest() {
       targetPct: Number(el.targetInput.value) || 5,
       stopPct: Number(el.stopInput.value) || 5,
       maxHoldDays: Number(el.maxHoldInput.value) || 5,
-    });
+    };
+    if (isGroupMode) {
+      payload.rules = rulesForCurrentGroup();
+      payload.minMatches = currentRuleGroup().minMatches || 1;
+      state.backtest = await postJson("/api/rule-group/backtest", payload);
+    } else {
+      payload.rule = currentRule();
+      state.backtest = await postJson("/api/rule/backtest", payload);
+    }
     renderBacktest();
   } catch (error) {
     el.backtestSummary.innerHTML = `<div class="detail-block error"><h3>Backtest Error</h3><p>${escapeHtml(error.message)}</p></div>`;
@@ -371,15 +484,74 @@ function addFilter(filterId) {
   state.backtest = null;
   saveRules();
   renderAll();
-  runRuleScan();
+  runScan();
 }
 
 function currentRule() {
   return state.rules[state.activeRuleIndex] || state.rules[0];
 }
 
+function currentRuleGroup() {
+  return state.ruleGroups[state.activeRuleGroupIndex] || state.ruleGroups[0] || { id: "default", name: "Universal Rule Group", minMatches: 1, ruleIds: [] };
+}
+
+function rulesForCurrentGroup() {
+  const group = currentRuleGroup();
+  return group.ruleIds.map((id) => state.rules.find((rule) => rule.id === id)).filter(Boolean);
+}
+
+async function runRuleGroupScan() {
+  const selectedRules = rulesForCurrentGroup();
+  if (!selectedRules.length) {
+    state.results = [];
+    state.metrics = {};
+    state.selectedSymbol = null;
+    state.prices = [];
+    renderAll();
+    return;
+  }
+  const payload = {
+    rules: selectedRules,
+    minMatches: currentRuleGroup().minMatches || selectedRules.length,
+    group: state.groupId,
+    date: state.date,
+    search: state.search,
+    limit: 200,
+  };
+  el.resultsBody.innerHTML = `<tr><td colspan="17" class="empty-state">Running rule group...</td></tr>`;
+  const result = await postJson("/api/rule-group/results", payload);
+  state.results = result.results || [];
+  state.metrics = result.metrics || {};
+  state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
+  if (state.selectedSymbol) {
+    const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(state.selectedSymbol)}&date=${encodeURIComponent(state.date)}`);
+    state.prices = prices.prices || [];
+  } else {
+    state.prices = [];
+  }
+  renderAll();
+}
+
 function filterDefinition(filterId) {
   return state.filterLibrary.find((filter) => filter.id === filterId);
+}
+
+function saveCurrentRuleGroupFromUi() {
+  const group = currentRuleGroup();
+  group.name = el.ruleGroupNameInput.value.trim() || "Untitled Rule Group";
+  group.ruleIds = Array.from(el.ruleGroupMembers.querySelectorAll("input[data-rule-group-member]:checked")).map((input) => input.dataset.ruleGroupMember);
+  const requestedMatches = Number(el.minRuleMatchesInput.value) || group.ruleIds.length || 1;
+  group.minMatches = Math.max(1, Math.min(requestedMatches, group.ruleIds.length || 1));
+  state.backtest = null;
+}
+
+function syncRuleGroupsWithRules() {
+  const knownRuleIds = new Set(state.rules.map((rule) => rule.id));
+  state.ruleGroups.forEach((group) => {
+    group.ruleIds = group.ruleIds.filter((id) => knownRuleIds.has(id));
+  });
+  if (!state.ruleGroups.length) state.ruleGroups = defaultRuleGroups();
+  saveRuleGroups();
 }
 
 function humanValues(selected) {
@@ -404,15 +576,66 @@ function humanValues(selected) {
 function loadSavedRules(defaultRule) {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    if (Array.isArray(saved) && saved.length) return saved;
+    if (Array.isArray(saved) && saved.length) return withRuleIds(saved);
   } catch (error) {
     console.warn("Could not load saved rules", error);
   }
-  return [defaultRule];
+  const rules = withRuleIds([defaultRule]);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(rules));
+  return rules;
 }
 
 function saveRules() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.rules));
+}
+
+function loadSavedRuleGroups() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RULE_GROUP_STORAGE_KEY) || "[]");
+    if (Array.isArray(saved) && saved.length) {
+      const knownRuleIds = new Set(state.rules.map((rule) => rule.id));
+      const cleaned = saved.map((group) => ({
+        id: group.id || createId("group"),
+        name: group.name || "Untitled Rule Group",
+        minMatches: Number(group.minMatches) || 1,
+        ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
+      })).filter((group) => group.ruleIds.length);
+      if (cleaned.length) return cleaned;
+    }
+  } catch (error) {
+    console.warn("Could not load saved rule groups", error);
+  }
+  const groups = defaultRuleGroups();
+  localStorage.setItem(RULE_GROUP_STORAGE_KEY, JSON.stringify(groups));
+  return groups;
+}
+
+function saveRuleGroups() {
+  localStorage.setItem(RULE_GROUP_STORAGE_KEY, JSON.stringify(state.ruleGroups));
+}
+
+function defaultRuleGroups() {
+  return [{
+    id: "universal",
+    name: "Universal Rule Group",
+    minMatches: Math.max(1, state.rules.length),
+    ruleIds: state.rules.map((rule) => rule.id),
+  }];
+}
+
+function withRuleIds(rules) {
+  let changed = false;
+  const result = rules.map((rule) => {
+    if (rule.id) return rule;
+    changed = true;
+    return { ...rule, id: createId("rule") };
+  });
+  if (changed) localStorage.setItem(STORAGE_KEY, JSON.stringify(result));
+  return result;
+}
+
+function createId(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function fetchJson(url) {

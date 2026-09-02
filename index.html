@@ -28,6 +28,20 @@
         </section>
 
         <section class="panel compact">
+          <label for="ruleGroupSelect">Rule group</label>
+          <select id="ruleGroupSelect"></select>
+          <input id="ruleGroupNameInput" type="text" placeholder="Rule group name" autocomplete="off" />
+          <label>Min matching rules
+            <input id="minRuleMatchesInput" type="number" min="1" step="1" value="1" />
+          </label>
+          <div id="ruleGroupMembers" class="check-list"></div>
+          <div class="button-row">
+            <button id="saveRuleGroupButton" type="button">Save group</button>
+            <button id="newRuleGroupButton" type="button">New group</button>
+          </div>
+        </section>
+
+        <section class="panel compact">
           <label for="groupSelect">Stock group</label>
           <select id="groupSelect"></select>
         </section>
@@ -112,6 +126,7 @@
                 <thead>
                   <tr>
                     <th>Stock</th>
+                    <th>Rules</th>
                     <th>Close</th>
                     <th>Volume</th>
                     <th>Vol/20D</th>
@@ -146,6 +161,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-10"></script>
+    <script src="./app.js?v=builder-11"></script>
   </body>
 </html>
