@@ -234,7 +234,7 @@ function renderMetrics() {
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="13" class="empty-state">No stocks passed this rule.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="16" class="empty-state">No stocks passed this rule.</td></tr>`;
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
@@ -246,11 +246,14 @@ function renderTable() {
       <td>${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}</td>
       <td>${Number(item.relativeDelivery || 0).toFixed(2)}x</td>
       <td class="${item.momentum3D > 0 ? "positive" : item.momentum3D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum3D || 0)}</td>
+      <td>${formatPlainPct(item.closePositionDay || 0)}</td>
       <td>${formatPct(item.distanceFrom20DHigh || 0)}</td>
       <td>${formatPlainPct(item.rangePosition52W || 0)}</td>
       <td>${Number(item.obv3D || 0).toFixed(2)}x</td>
       <td>${formatNumber(item.adv20)}</td>
+      <td>Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr</td>
       <td>${Number(item.rsi14).toFixed(2)}</td>
+      <td>${formatPlainPct(item.atrPct || 0)}</td>
       <td class="${item.nextDayReturn > 0 ? "positive" : item.nextDayReturn < 0 ? "negative" : "neutral"}">${item.nextDayReturn == null ? "Pending" : formatPct(item.nextDayReturn)}</td>
     </tr>
   `).join("");
@@ -275,9 +278,13 @@ function renderDetails() {
       <p>Delivery ${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}${item.deliverableQty == null ? "" : `, delivered quantity ${formatNumber(item.deliverableQty)}`}.</p>
       <p>Delivered quantity is ${Number(item.relativeDelivery || 0).toFixed(2)}x of its 20-day average${item.avgDelivery20 ? ` (${formatNumber(item.avgDelivery20)})` : ""}.</p>
       <p>Volume is ${Number(item.relativeVolume || 0).toFixed(2)}x of its 20-day average.</p>
+      <p>20-day rupee liquidity is Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr.</p>
       <p>3-day price change is ${formatPct(item.momentum3D || 0)}.</p>
+      <p>Close position in today's range is ${formatPlainPct(item.closePositionDay || 0)}.</p>
       <p>Close is ${formatPct(item.distanceFrom20DHigh || 0)} from 20D high Rs. ${formatMoney(item.high20D || 0)}.</p>
       <p>52W position is ${formatPlainPct(item.rangePosition52W || 0)} between low Rs. ${formatMoney(item.low52W || 0)} and high Rs. ${formatMoney(item.high52W || 0)}.</p>
+      <p>EMA trend: close Rs. ${formatMoney(item.close)}, EMA9 Rs. ${formatMoney(item.ema9 || 0)}, EMA20 Rs. ${formatMoney(item.ema20 || 0)}, SMA50 Rs. ${formatMoney(item.sma50 || 0)}.</p>
+      <p>ATR risk is ${formatPlainPct(item.atrPct || 0)} with ATR14 Rs. ${formatMoney(item.atr14 || 0)}.</p>
       <p>3-day OBV change is ${Number(item.obv3D || 0).toFixed(2)}x of 20-day average volume.</p>
     </div>
     <div class="detail-block">
@@ -310,7 +317,7 @@ async function runRuleScan() {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="13" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="16" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -385,6 +392,10 @@ function humanValues(selected) {
   if (selected.id === "price_momentum_3d") return `3-day price change between ${values.minMomentum3D}% and ${values.maxMomentum3D}%`;
   if (selected.id === "range_position_52w") return `Close position between ${values.minRangePosition52W}% and ${values.maxRangePosition52W}% of 52-week range`;
   if (selected.id === "close_near_20d_high") return `Close within ${values.maxDistanceFrom20DHigh}% below the 20-day high`;
+  if (selected.id === "close_position_day_range") return `Close position between ${values.minClosePositionDay}% and ${values.maxClosePositionDay}% of today's high-low range`;
+  if (selected.id === "rupee_liquidity") return `20D average traded value between Rs. ${values.minRupeeLiquidityCr} cr and Rs. ${values.maxRupeeLiquidityCr} cr`;
+  if (selected.id === "ema_trend") return `At least ${values.minEmaTrendChecks} of 3 trend checks pass: close above EMA9, close above EMA20, EMA20 above SMA50`;
+  if (selected.id === "atr_risk") return `ATR 14 between ${values.minAtrPct}% and ${values.maxAtrPct}% of close`;
   if (selected.id === "obv_accumulation_3d") return `3-day OBV change at least ${values.minObv3D}x of 20D average volume while 3-day price move stays within +/-${values.maxAbsMomentum3D}%`;
   if (selected.id === "rsi14_range") return `RSI 14 between ${values.rsiMin} and ${values.rsiMax}`;
   return JSON.stringify(values);

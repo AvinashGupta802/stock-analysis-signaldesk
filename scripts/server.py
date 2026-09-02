@@ -89,6 +89,45 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "close_position_day_range",
+        "name": "Close Position In Day Range",
+        "category": "Price Action",
+        "meaning": "Keep stocks whose close is in a chosen zone of the day's high-low range.",
+        "fields": [
+            {"key": "minClosePositionDay", "label": "Min close position %", "default": 70, "step": 1},
+            {"key": "maxClosePositionDay", "label": "Max close position %", "default": 100, "step": 1},
+        ],
+    },
+    {
+        "id": "rupee_liquidity",
+        "name": "Rupee Liquidity",
+        "category": "Liquidity",
+        "meaning": "Keep stocks whose 20-day average traded value is within a chosen rupee-crore range.",
+        "fields": [
+            {"key": "minRupeeLiquidityCr", "label": "Min rupee liquidity cr", "default": 20, "step": 1},
+            {"key": "maxRupeeLiquidityCr", "label": "Max rupee liquidity cr", "default": 999999, "step": 1},
+        ],
+    },
+    {
+        "id": "ema_trend",
+        "name": "EMA Trend",
+        "category": "Trend",
+        "meaning": "Keep stocks that satisfy enough short-term trend checks using EMA9, EMA20, and SMA50.",
+        "fields": [
+            {"key": "minEmaTrendChecks", "label": "Min trend checks", "default": 3, "step": 1},
+        ],
+    },
+    {
+        "id": "atr_risk",
+        "name": "ATR Risk / Volatility",
+        "category": "Risk",
+        "meaning": "Keep stocks whose 14-day average true range is within a chosen percentage of close.",
+        "fields": [
+            {"key": "minAtrPct", "label": "Min ATR %", "default": 0, "step": 0.5},
+            {"key": "maxAtrPct", "label": "Max ATR %", "default": 8, "step": 0.5},
+        ],
+    },
+    {
         "id": "obv_accumulation_3d",
         "name": "OBV Accumulation 3D",
         "category": "Volume Accumulation",
@@ -377,6 +416,13 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "rangePosition52W": ctx["range_position_52w"],
         "high20D": ctx["high_20d"],
         "distanceFrom20DHigh": ctx["distance_from_20d_high"],
+        "closePositionDay": ctx["close_position_day"],
+        "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
+        "ema9": ctx["ema9"],
+        "ema20": ctx["ema20"],
+        "sma50": ctx["sma50"],
+        "atr14": ctx["atr14"],
+        "atrPct": ctx["atr_pct"],
         "obv3D": ctx["obv_3d"],
         "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
@@ -447,6 +493,31 @@ def evaluate_filter(ctx, selected):
         distance_below_high = abs(min(ctx["distance_from_20d_high"], 0))
         passed = ctx["distance_from_20d_high"] <= 0 and distance_below_high <= max_distance
         return passed, f"Close is {distance_below_high:.2f}% below 20D high; required <= {max_distance:g}%."
+    if filter_id == "close_position_day_range":
+        min_position = float(values.get("minClosePositionDay", 70))
+        max_position = float(values.get("maxClosePositionDay", 100))
+        passed = min_position <= ctx["close_position_day"] <= max_position
+        return passed, f"Close position {ctx['close_position_day']:.2f}% of day range; required {min_position:g}%-{max_position:g}%."
+    if filter_id == "rupee_liquidity":
+        min_liquidity = float(values.get("minRupeeLiquidityCr", 20))
+        max_liquidity = float(values.get("maxRupeeLiquidityCr", 999999))
+        passed = min_liquidity <= ctx["rupee_liquidity_cr"] <= max_liquidity
+        return passed, f"20D rupee liquidity Rs. {ctx['rupee_liquidity_cr']:.2f} cr; required Rs. {min_liquidity:g}-{max_liquidity:g} cr."
+    if filter_id == "ema_trend":
+        min_checks = max(0, min(3, int(values.get("minEmaTrendChecks", 3))))
+        checks = [
+            ctx["close"] > ctx["ema9"],
+            ctx["close"] > ctx["ema20"],
+            ctx["ema20"] > ctx["sma50"],
+        ]
+        passed_count = sum(1 for item in checks if item)
+        passed = passed_count >= min_checks
+        return passed, f"EMA trend {passed_count}/3 checks passed; required >= {min_checks}."
+    if filter_id == "atr_risk":
+        min_atr = float(values.get("minAtrPct", 0))
+        max_atr = float(values.get("maxAtrPct", 8))
+        passed = min_atr <= ctx["atr_pct"] <= max_atr
+        return passed, f"ATR 14 is {ctx['atr_pct']:.2f}% of close; required {min_atr:g}%-{max_atr:g}%."
     if filter_id == "obv_accumulation_3d":
         min_obv = float(values.get("minObv3D", 1))
         max_abs_momentum = float(values.get("maxAbsMomentum3D", 2))
@@ -475,6 +546,10 @@ def build_context(rows, index):
     high_52w = max(row["high"] for row in range_window)
     low_52w = min(row["low"] for row in range_window)
     obv = obv_series(closes, volumes)
+    ema9 = ema_series(closes, 9)[-1]
+    ema20 = ema_series(closes, 20)[-1]
+    sma50 = avg(closes[-50:])
+    atr14 = atr_series(window, 14)[-1]
     return {
         "date": current["trade_date"],
         "close": current["close"],
@@ -488,6 +563,13 @@ def build_context(rows, index):
         "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
         "high_20d": high_20d,
         "distance_from_20d_high": pct(current["close"], high_20d),
+        "close_position_day": range_position(current["close"], current["low"], current["high"]),
+        "rupee_liquidity_cr": (current["close"] * adv20) / 10_000_000,
+        "ema9": ema9,
+        "ema20": ema20,
+        "sma50": sma50,
+        "atr14": atr14,
+        "atr_pct": pct(current["close"] + atr14, current["close"]),
         "high_52w": high_52w,
         "low_52w": low_52w,
         "range_position_52w": range_position(current["close"], low_52w, high_52w),
@@ -503,16 +585,27 @@ def build_indicators(rows):
     volumes = [row["volume"] for row in rows]
     delivery_quantities = [row.get("deliverable_qty") for row in rows]
     obv = obv_series(closes, volumes)
+    ema9 = ema_series(closes, 9)
+    ema20 = ema_series(closes, 20)
+    atr14 = atr_series(rows, 14)
     adv20 = [0] * len(rows)
     for index in range(20, len(rows)):
         adv20[index] = avg(volumes[index - 20:index])
     relative_volume = [0] * len(rows)
     avg_delivery_20 = [0] * len(rows)
     relative_delivery = [0] * len(rows)
+    sma50 = [0] * len(rows)
+    close_position_day = [50] * len(rows)
+    rupee_liquidity_cr = [0] * len(rows)
+    atr_pct = [0] * len(rows)
     for index in range(len(rows)):
         relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
         avg_delivery_20[index] = avg_available(delivery_quantities[index - 20:index]) if index >= 20 else 0
         relative_delivery[index] = relative_to_avg(delivery_quantities[index], avg_delivery_20[index])
+        sma50[index] = avg(closes[max(0, index - 49):index + 1])
+        close_position_day[index] = range_position(closes[index], lows[index], highs[index])
+        rupee_liquidity_cr[index] = (closes[index] * adv20[index]) / 10_000_000
+        atr_pct[index] = pct(closes[index] + atr14[index], closes[index])
     momentum_3d = [0] * len(rows)
     high_52w = [0] * len(rows)
     low_52w = [0] * len(rows)
@@ -538,6 +631,13 @@ def build_indicators(rows):
         "momentum_3d": momentum_3d,
         "high_20d": high_20d,
         "distance_from_20d_high": distance_from_20d_high,
+        "close_position_day": close_position_day,
+        "rupee_liquidity_cr": rupee_liquidity_cr,
+        "ema9": ema9,
+        "ema20": ema20,
+        "sma50": sma50,
+        "atr14": atr14,
+        "atr_pct": atr_pct,
         "high_52w": high_52w,
         "low_52w": low_52w,
         "range_position_52w": range_position_52w,
@@ -561,6 +661,13 @@ def build_backtest_context(rows, indicators, index):
         "momentum_3d": indicators["momentum_3d"][index],
         "high_20d": indicators["high_20d"][index],
         "distance_from_20d_high": indicators["distance_from_20d_high"][index],
+        "close_position_day": indicators["close_position_day"][index],
+        "rupee_liquidity_cr": indicators["rupee_liquidity_cr"][index],
+        "ema9": indicators["ema9"][index],
+        "ema20": indicators["ema20"][index],
+        "sma50": indicators["sma50"][index],
+        "atr14": indicators["atr14"][index],
+        "atr_pct": indicators["atr_pct"][index],
         "high_52w": indicators["high_52w"][index],
         "low_52w": indicators["low_52w"][index],
         "range_position_52w": indicators["range_position_52w"][index],
@@ -820,6 +927,33 @@ def relative_to_avg(value, average):
 def range_position(close, low, high):
     spread = high - low
     return ((close - low) / spread) * 100 if spread else 50
+
+
+def ema_series(values, period):
+    if not values:
+        return []
+    multiplier = 2 / (period + 1)
+    current = values[0]
+    out = []
+    for value in values:
+        current = (value * multiplier) + (current * (1 - multiplier))
+        out.append(current)
+    return out
+
+
+def atr_series(rows, period=14):
+    true_ranges = []
+    out = []
+    for index, row in enumerate(rows):
+        prev_close = rows[index - 1]["close"] if index else row["close"]
+        true_range = max(
+            row["high"] - row["low"],
+            abs(row["high"] - prev_close),
+            abs(row["low"] - prev_close),
+        )
+        true_ranges.append(true_range)
+        out.append(avg(true_ranges[max(0, index - period + 1):index + 1]))
+    return out
 
 
 def rsi(values, period=14):
