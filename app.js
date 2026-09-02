@@ -10,7 +10,8 @@ const state = {
   ruleGroups: [],
   activeRuleIndex: 0,
   activeRuleGroupIndex: 0,
-  mode: "rule",
+  mode: "group",
+  view: "analyze",
   groupId: "all",
   date: null,
   search: "",
@@ -23,6 +24,13 @@ const state = {
 };
 
 const el = {
+  viewButtons: Array.from(document.querySelectorAll("[data-view-button]")),
+  viewSections: Array.from(document.querySelectorAll("[data-view-section]")),
+  analysisModeSelect: document.querySelector("#analysisModeSelect"),
+  analysisRuleSelect: document.querySelector("#analysisRuleSelect"),
+  analysisRuleGroupSelect: document.querySelector("#analysisRuleGroupSelect"),
+  analysisRuleLabel: document.querySelector("#analysisRuleLabel"),
+  analysisGroupLabel: document.querySelector("#analysisGroupLabel"),
   ruleSelect: document.querySelector("#ruleSelect"),
   ruleNameInput: document.querySelector("#ruleNameInput"),
   saveRuleButton: document.querySelector("#saveRuleButton"),
@@ -77,9 +85,36 @@ async function init() {
 }
 
 function bindShell() {
+  el.viewButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.view = button.dataset.viewButton;
+      renderView();
+    });
+  });
+  el.analysisModeSelect.addEventListener("change", () => {
+    state.mode = el.analysisModeSelect.value;
+    state.backtest = null;
+    renderAll();
+    runScan();
+  });
+  el.analysisRuleSelect.addEventListener("change", () => {
+    state.activeRuleIndex = Number(el.analysisRuleSelect.value);
+    state.mode = "rule";
+    state.backtest = null;
+    renderAll();
+    runScan();
+  });
+  el.analysisRuleGroupSelect.addEventListener("change", () => {
+    state.activeRuleGroupIndex = Number(el.analysisRuleGroupSelect.value);
+    state.mode = "group";
+    state.backtest = null;
+    renderAll();
+    runScan();
+  });
   el.ruleSelect.addEventListener("change", () => {
     state.activeRuleIndex = Number(el.ruleSelect.value);
     state.mode = "rule";
+    state.view = "rules";
     state.backtest = null;
     renderAll();
     runScan();
@@ -94,6 +129,7 @@ function bindShell() {
     state.rules.push({ id: createId("rule"), name: "New Buy Rule", filters: [] });
     state.activeRuleIndex = state.rules.length - 1;
     state.mode = "rule";
+    state.view = "rules";
     state.backtest = null;
     saveRules();
     syncRuleGroupsWithRules();
@@ -103,6 +139,7 @@ function bindShell() {
   el.ruleGroupSelect.addEventListener("change", () => {
     state.activeRuleGroupIndex = Number(el.ruleGroupSelect.value);
     state.mode = "group";
+    state.view = "groups";
     state.backtest = null;
     renderAll();
     runScan();
@@ -110,6 +147,7 @@ function bindShell() {
   el.saveRuleGroupButton.addEventListener("click", () => {
     saveCurrentRuleGroupFromUi();
     state.mode = "group";
+    state.view = "groups";
     saveRuleGroups();
     renderAll();
     runScan();
@@ -124,6 +162,7 @@ function bindShell() {
     });
     state.activeRuleGroupIndex = state.ruleGroups.length - 1;
     state.mode = "group";
+    state.view = "groups";
     state.backtest = null;
     saveRuleGroups();
     renderAll();
@@ -147,6 +186,8 @@ function bindShell() {
 }
 
 function renderAll() {
+  renderView();
+  renderAnalysisSelectors();
   renderRuleSelect();
   renderRuleGroupSelect();
   renderRuleGroupMembers();
@@ -160,6 +201,28 @@ function renderAll() {
   renderTable();
   renderDetails();
   renderBacktest();
+}
+
+function renderView() {
+  el.viewButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.viewButton === state.view);
+  });
+  el.viewSections.forEach((section) => {
+    section.hidden = section.dataset.viewSection !== state.view;
+  });
+}
+
+function renderAnalysisSelectors() {
+  el.analysisModeSelect.value = state.mode;
+  el.analysisRuleSelect.innerHTML = state.rules.map((rule, index) => `<option value="${index}">${escapeHtml(rule.name)}</option>`).join("");
+  el.analysisRuleSelect.value = state.activeRuleIndex;
+  el.analysisRuleGroupSelect.innerHTML = state.ruleGroups.map((group, index) => `<option value="${index}">${escapeHtml(group.name)}</option>`).join("");
+  el.analysisRuleGroupSelect.value = state.activeRuleGroupIndex;
+  const usingRule = state.mode === "rule";
+  el.analysisRuleLabel.hidden = !usingRule;
+  el.analysisRuleSelect.hidden = !usingRule;
+  el.analysisGroupLabel.hidden = usingRule;
+  el.analysisRuleGroupSelect.hidden = usingRule;
 }
 
 function renderRuleSelect() {
@@ -574,13 +637,21 @@ function humanValues(selected) {
 }
 
 function loadSavedRules(defaultRule) {
+  const starters = starterRules(defaultRule);
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    if (Array.isArray(saved) && saved.length) return withRuleIds(saved);
+    if (Array.isArray(saved) && saved.length) {
+      const savedRules = withRuleIds(saved);
+      const names = new Set(savedRules.map((rule) => rule.name));
+      const ids = new Set(savedRules.map((rule) => rule.id));
+      const merged = [...savedRules, ...starters.filter((rule) => !ids.has(rule.id) && !names.has(rule.name))];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+      return merged;
+    }
   } catch (error) {
     console.warn("Could not load saved rules", error);
   }
-  const rules = withRuleIds([defaultRule]);
+  const rules = withRuleIds(starters);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(rules));
   return rules;
 }
@@ -590,6 +661,7 @@ function saveRules() {
 }
 
 function loadSavedRuleGroups() {
+  const templates = starterRuleGroups();
   try {
     const saved = JSON.parse(localStorage.getItem(RULE_GROUP_STORAGE_KEY) || "[]");
     if (Array.isArray(saved) && saved.length) {
@@ -600,12 +672,18 @@ function loadSavedRuleGroups() {
         minMatches: Number(group.minMatches) || 1,
         ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
       })).filter((group) => group.ruleIds.length);
-      if (cleaned.length) return cleaned;
+      if (cleaned.length) {
+        const ids = new Set(cleaned.map((group) => group.id));
+        const names = new Set(cleaned.map((group) => group.name));
+        const merged = [...cleaned, ...templates.filter((group) => !ids.has(group.id) && !names.has(group.name) && group.ruleIds.length)];
+        localStorage.setItem(RULE_GROUP_STORAGE_KEY, JSON.stringify(merged));
+        return merged;
+      }
     }
   } catch (error) {
     console.warn("Could not load saved rule groups", error);
   }
-  const groups = defaultRuleGroups();
+  const groups = templates;
   localStorage.setItem(RULE_GROUP_STORAGE_KEY, JSON.stringify(groups));
   return groups;
 }
@@ -617,10 +695,95 @@ function saveRuleGroups() {
 function defaultRuleGroups() {
   return [{
     id: "universal",
-    name: "Universal Rule Group",
-    minMatches: Math.max(1, state.rules.length),
+    name: "All Rules Agreement",
+    minMatches: Math.min(2, Math.max(1, state.rules.length)),
     ruleIds: state.rules.map((rule) => rule.id),
   }];
+}
+
+function starterRules(defaultRule) {
+  return [
+    {
+      ...defaultRule,
+      id: "rule_price_range",
+      name: "Price Range Only",
+    },
+    {
+      id: "rule_volume_delivery_core",
+      name: "Volume Delivery Core",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        { id: "relative_volume", values: { minRelativeVolume: 1.5, maxRelativeVolume: 999 } },
+        { id: "delivery_pct_range", values: { minDeliveryPct: 60, maxDeliveryPct: 100 } },
+      ],
+    },
+    {
+      id: "rule_breakout_trend_quality",
+      name: "Breakout Trend Quality",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        { id: "close_near_20d_high", values: { maxDistanceFrom20DHigh: 2 } },
+        { id: "ema_trend", values: { minEmaTrendChecks: 3 } },
+        { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
+      ],
+    },
+    {
+      id: "rule_delivery_accumulation",
+      name: "Delivery Accumulation",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        { id: "delivery_pct_range", values: { minDeliveryPct: 60, maxDeliveryPct: 100 } },
+        { id: "relative_delivery_qty", values: { minRelativeDelivery: 1.5, maxRelativeDelivery: 999 } },
+      ],
+    },
+    {
+      id: "rule_obv_consolidation",
+      name: "OBV Consolidation Breakout",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        { id: "obv_accumulation_3d", values: { minObv3D: 0.5, maxAbsMomentum3D: 2 } },
+        { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
+      ],
+    },
+    {
+      id: "rule_momentum_controlled",
+      name: "Momentum Controlled",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        { id: "price_momentum_3d", values: { minMomentum3D: 2, maxMomentum3D: 8 } },
+        { id: "rsi14_range", values: { rsiMin: 50, rsiMax: 68 } },
+        { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
+      ],
+    },
+  ];
+}
+
+function starterRuleGroups() {
+  const availableIds = new Set(state.rules.map((rule) => rule.id));
+  const group = (id, name, minMatches, ruleIds) => ({
+    id,
+    name,
+    minMatches,
+    ruleIds: ruleIds.filter((ruleId) => availableIds.has(ruleId)),
+  });
+  return [
+    ...defaultRuleGroups(),
+    group("group_core_agreement", "Core Agreement", 2, [
+      "rule_volume_delivery_core",
+      "rule_breakout_trend_quality",
+    ]),
+    group("group_swing_quality", "Swing Quality Basket", 2, [
+      "rule_volume_delivery_core",
+      "rule_breakout_trend_quality",
+      "rule_delivery_accumulation",
+      "rule_momentum_controlled",
+    ]),
+    group("group_breakout_watch", "Breakout Watch", 2, [
+      "rule_breakout_trend_quality",
+      "rule_obv_consolidation",
+      "rule_momentum_controlled",
+    ]),
+  ].filter((group) => group.ruleIds.length);
 }
 
 function withRuleIds(rules) {

@@ -55,6 +55,28 @@ input {
   margin-bottom: 6px;
 }
 
+.view-tabs {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.view-tab {
+  text-align: left;
+  border-color: var(--line);
+  background: #fff;
+}
+
+.view-tab.active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+[hidden] {
+  display: none !important;
+}
+
 .brand-mark {
   width: 44px;
   height: 44px;

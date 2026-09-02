@@ -17,7 +17,25 @@
           </div>
         </div>
 
-        <section class="panel compact">
+        <nav class="view-tabs" aria-label="Workspace sections">
+          <button class="view-tab active" type="button" data-view-button="analyze">Analyze</button>
+          <button class="view-tab" type="button" data-view-button="rules">Create Rules</button>
+          <button class="view-tab" type="button" data-view-button="groups">Rule Groups</button>
+        </nav>
+
+        <section class="panel compact" data-view-section="analyze">
+          <label for="analysisModeSelect">Analyze using</label>
+          <select id="analysisModeSelect">
+            <option value="group">Recommendation group</option>
+            <option value="rule">Single rule</option>
+          </select>
+          <label id="analysisRuleLabel" for="analysisRuleSelect">Single rule</label>
+          <select id="analysisRuleSelect"></select>
+          <label id="analysisGroupLabel" for="analysisRuleGroupSelect">Recommendation group</label>
+          <select id="analysisRuleGroupSelect"></select>
+        </section>
+
+        <section class="panel compact" data-view-section="rules">
           <label for="ruleSelect">Single rule</label>
           <select id="ruleSelect"></select>
           <input id="ruleNameInput" type="text" placeholder="Rule name" autocomplete="off" />
@@ -27,7 +45,7 @@
           </div>
         </section>
 
-        <section class="panel compact">
+        <section class="panel compact" data-view-section="groups">
           <label for="ruleGroupSelect">Recommendation group</label>
           <select id="ruleGroupSelect"></select>
           <input id="ruleGroupNameInput" type="text" placeholder="Recommendation group name" autocomplete="off" />
@@ -41,36 +59,36 @@
           </div>
         </section>
 
-        <section class="panel compact">
+        <section class="panel compact" data-view-section="analyze">
           <label for="groupSelect">Stock group</label>
           <select id="groupSelect"></select>
         </section>
 
-        <section class="panel compact">
+        <section class="panel compact" data-view-section="analyze">
           <label for="dateSelect">Signal date</label>
           <select id="dateSelect"></select>
         </section>
 
-        <section class="panel compact">
+        <section class="panel compact" data-view-section="analyze">
           <label for="searchInput">Find stock</label>
           <input id="searchInput" type="search" placeholder="Search symbol or name" autocomplete="off" />
         </section>
 
-        <section class="panel rule-config">
+        <section class="panel rule-config" data-view-section="rules">
           <div class="section-title">
             <h2>Filter Library</h2>
           </div>
           <div id="filterLibrary"></div>
         </section>
 
-        <section class="panel rule-config">
+        <section class="panel rule-config" data-view-section="rules">
           <div class="section-title">
             <h2>Selected Filters</h2>
           </div>
           <div id="selectedFilters"></div>
         </section>
 
-        <section class="panel compact">
+        <section class="panel compact" data-view-section="analyze">
           <label>Backtest setup</label>
           <div class="input-grid two-col">
             <label>From
@@ -161,6 +179,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-12"></script>
+    <script src="./app.js?v=builder-13"></script>
   </body>
 </html>
