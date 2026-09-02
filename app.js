@@ -234,7 +234,7 @@ function renderMetrics() {
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="11" class="empty-state">No stocks passed this rule.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="12" class="empty-state">No stocks passed this rule.</td></tr>`;
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
@@ -246,6 +246,7 @@ function renderTable() {
       <td>${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}</td>
       <td>${Number(item.relativeDelivery || 0).toFixed(2)}x</td>
       <td class="${item.momentum3D > 0 ? "positive" : item.momentum3D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum3D || 0)}</td>
+      <td>${formatPlainPct(item.rangePosition52W || 0)}</td>
       <td>${Number(item.obv3D || 0).toFixed(2)}x</td>
       <td>${formatNumber(item.adv20)}</td>
       <td>${Number(item.rsi14).toFixed(2)}</td>
@@ -274,6 +275,7 @@ function renderDetails() {
       <p>Delivered quantity is ${Number(item.relativeDelivery || 0).toFixed(2)}x of its 20-day average${item.avgDelivery20 ? ` (${formatNumber(item.avgDelivery20)})` : ""}.</p>
       <p>Volume is ${Number(item.relativeVolume || 0).toFixed(2)}x of its 20-day average.</p>
       <p>3-day price change is ${formatPct(item.momentum3D || 0)}.</p>
+      <p>52W position is ${formatPlainPct(item.rangePosition52W || 0)} between low Rs. ${formatMoney(item.low52W || 0)} and high Rs. ${formatMoney(item.high52W || 0)}.</p>
       <p>3-day OBV change is ${Number(item.obv3D || 0).toFixed(2)}x of 20-day average volume.</p>
     </div>
     <div class="detail-block">
@@ -306,7 +308,7 @@ async function runRuleScan() {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="11" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="12" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -379,6 +381,7 @@ function humanValues(selected) {
   if (selected.id === "delivery_pct_range") return `Delivery percentage between ${values.minDeliveryPct}% and ${values.maxDeliveryPct}%`;
   if (selected.id === "relative_delivery_qty") return `Today delivered quantity between ${values.minRelativeDelivery}x and ${values.maxRelativeDelivery}x of 20D average delivered quantity`;
   if (selected.id === "price_momentum_3d") return `3-day price change between ${values.minMomentum3D}% and ${values.maxMomentum3D}%`;
+  if (selected.id === "range_position_52w") return `Close position between ${values.minRangePosition52W}% and ${values.maxRangePosition52W}% of 52-week range`;
   if (selected.id === "obv_accumulation_3d") return `3-day OBV change at least ${values.minObv3D}x of 20D average volume while 3-day price move stays within +/-${values.maxAbsMomentum3D}%`;
   if (selected.id === "rsi14_range") return `RSI 14 between ${values.rsiMin} and ${values.rsiMax}`;
   return JSON.stringify(values);

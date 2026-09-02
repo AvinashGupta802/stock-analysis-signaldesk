@@ -70,6 +70,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "range_position_52w",
+        "name": "52W Range Position",
+        "category": "Market Structure",
+        "meaning": "Keep stocks whose close is in a chosen zone between their 52-week low and 52-week high.",
+        "fields": [
+            {"key": "minRangePosition52W", "label": "Min range position %", "default": 70, "step": 1},
+            {"key": "maxRangePosition52W", "label": "Max range position %", "default": 100, "step": 1},
+        ],
+    },
+    {
         "id": "obv_accumulation_3d",
         "name": "OBV Accumulation 3D",
         "category": "Volume Accumulation",
@@ -319,7 +329,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
          AND d.trade_date = p.trade_date
         WHERE p.instrument_id = ? AND p.trade_date <= ?
         ORDER BY p.trade_date DESC
-        LIMIT 80
+        LIMIT 280
         """,
         (stock["id"], trade_date),
     ).fetchall()
@@ -353,6 +363,9 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "adv20": ctx["adv20"],
         "relativeVolume": ctx["relative_volume"],
         "momentum3D": ctx["momentum_3d"],
+        "high52W": ctx["high_52w"],
+        "low52W": ctx["low_52w"],
+        "rangePosition52W": ctx["range_position_52w"],
         "obv3D": ctx["obv_3d"],
         "rsi14": ctx["rsi14"],
         "nextDate": next_row["trade_date"] if next_row else None,
@@ -413,6 +426,11 @@ def evaluate_filter(ctx, selected):
         max_momentum = float(values.get("maxMomentum3D", 12))
         passed = min_momentum <= ctx["momentum_3d"] <= max_momentum
         return passed, f"3D price change {ctx['momentum_3d']:+.2f}%; required {min_momentum:g}%-{max_momentum:g}%."
+    if filter_id == "range_position_52w":
+        min_range_position = float(values.get("minRangePosition52W", 70))
+        max_range_position = float(values.get("maxRangePosition52W", 100))
+        passed = min_range_position <= ctx["range_position_52w"] <= max_range_position
+        return passed, f"52W range position {ctx['range_position_52w']:.2f}%; required {min_range_position:g}%-{max_range_position:g}%."
     if filter_id == "obv_accumulation_3d":
         min_obv = float(values.get("minObv3D", 1))
         max_abs_momentum = float(values.get("maxAbsMomentum3D", 2))
@@ -429,11 +447,16 @@ def evaluate_filter(ctx, selected):
 def build_context(rows, index):
     window = rows[:index + 1]
     closes = [row["close"] for row in window]
+    highs = [row["high"] for row in window]
+    lows = [row["low"] for row in window]
     volumes = [row["volume"] for row in window]
     delivery_quantities = [row.get("deliverable_qty") for row in window]
     current = rows[index]
     adv20 = avg(volumes[-21:-1])
     avg_delivery_20 = avg_available(delivery_quantities[-21:-1])
+    range_window = rows[max(0, index - 251):index + 1]
+    high_52w = max(row["high"] for row in range_window)
+    low_52w = min(row["low"] for row in range_window)
     obv = obv_series(closes, volumes)
     return {
         "date": current["trade_date"],
@@ -446,6 +469,9 @@ def build_context(rows, index):
         "adv20": adv20,
         "relative_volume": relative_to_avg(current["volume"], adv20),
         "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
+        "high_52w": high_52w,
+        "low_52w": low_52w,
+        "range_position_52w": range_position(current["close"], low_52w, high_52w),
         "obv_3d": relative_to_avg(obv[-1] - obv[-4], adv20) if len(obv) >= 4 else 0,
         "rsi14": rsi(closes, 14),
     }
@@ -453,6 +479,8 @@ def build_context(rows, index):
 
 def build_indicators(rows):
     closes = [row["close"] for row in rows]
+    highs = [row["high"] for row in rows]
+    lows = [row["low"] for row in rows]
     volumes = [row["volume"] for row in rows]
     delivery_quantities = [row.get("deliverable_qty") for row in rows]
     obv = obv_series(closes, volumes)
@@ -467,7 +495,15 @@ def build_indicators(rows):
         avg_delivery_20[index] = avg_available(delivery_quantities[index - 20:index]) if index >= 20 else 0
         relative_delivery[index] = relative_to_avg(delivery_quantities[index], avg_delivery_20[index])
     momentum_3d = [0] * len(rows)
+    high_52w = [0] * len(rows)
+    low_52w = [0] * len(rows)
+    range_position_52w = [50] * len(rows)
     obv_3d = [0] * len(rows)
+    for index in range(len(rows)):
+        start = max(0, index - 251)
+        high_52w[index] = max(highs[start:index + 1])
+        low_52w[index] = min(lows[start:index + 1])
+        range_position_52w[index] = range_position(closes[index], low_52w[index], high_52w[index])
     for index in range(3, len(rows)):
         momentum_3d[index] = pct(closes[index], closes[index - 3])
         obv_3d[index] = relative_to_avg(obv[index] - obv[index - 3], adv20[index])
@@ -477,6 +513,9 @@ def build_indicators(rows):
         "avg_delivery_20": avg_delivery_20,
         "relative_delivery": relative_delivery,
         "momentum_3d": momentum_3d,
+        "high_52w": high_52w,
+        "low_52w": low_52w,
+        "range_position_52w": range_position_52w,
         "obv_3d": obv_3d,
         "rsi14": rsi_series(closes, 14),
     }
@@ -495,6 +534,9 @@ def build_backtest_context(rows, indicators, index):
         "adv20": indicators["adv20"][index],
         "relative_volume": indicators["relative_volume"][index],
         "momentum_3d": indicators["momentum_3d"][index],
+        "high_52w": indicators["high_52w"][index],
+        "low_52w": indicators["low_52w"][index],
+        "range_position_52w": indicators["range_position_52w"][index],
         "obv_3d": indicators["obv_3d"][index],
         "rsi14": indicators["rsi14"][index],
     }
@@ -746,6 +788,11 @@ def avg_available(values):
 
 def relative_to_avg(value, average):
     return (value / average) if value is not None and average else 0
+
+
+def range_position(close, low, high):
+    spread = high - low
+    return ((close - low) / spread) * 100 if spread else 50
 
 
 def rsi(values, period=14):
