@@ -50,6 +50,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "relative_delivery_qty",
+        "name": "Delivery Qty vs 20D Avg",
+        "category": "Delivery",
+        "meaning": "Keep stocks whose delivered quantity is higher or lower than their normal 20-day delivered quantity.",
+        "fields": [
+            {"key": "minRelativeDelivery", "label": "Min delivery qty ratio", "default": 1.5, "step": 0.1},
+            {"key": "maxRelativeDelivery", "label": "Max delivery qty ratio", "default": 999, "step": 0.1},
+        ],
+    },
+    {
         "id": "price_momentum_3d",
         "name": "3-Day Price Momentum",
         "category": "Price Trend",
@@ -338,6 +348,8 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "volume": ctx["volume"],
         "deliverableQty": ctx["deliverable_qty"],
         "deliveryPct": ctx["delivery_pct"],
+        "avgDelivery20": ctx["avg_delivery_20"],
+        "relativeDelivery": ctx["relative_delivery"],
         "adv20": ctx["adv20"],
         "relativeVolume": ctx["relative_volume"],
         "momentum3D": ctx["momentum_3d"],
@@ -389,6 +401,13 @@ def evaluate_filter(ctx, selected):
             return False, "Delivery % is not available for this stock/date."
         passed = min_delivery_pct <= ctx["delivery_pct"] <= max_delivery_pct
         return passed, f"Delivery {ctx['delivery_pct']:.2f}%; required {min_delivery_pct:g}%-{max_delivery_pct:g}%."
+    if filter_id == "relative_delivery_qty":
+        min_relative_delivery = float(values.get("minRelativeDelivery", 1.5))
+        max_relative_delivery = float(values.get("maxRelativeDelivery", 999))
+        if ctx["deliverable_qty"] is None or ctx["avg_delivery_20"] <= 0:
+            return False, "20D average delivery quantity is not available for this stock/date."
+        passed = min_relative_delivery <= ctx["relative_delivery"] <= max_relative_delivery
+        return passed, f"Delivery quantity {ctx['relative_delivery']:.2f}x 20D average; required {min_relative_delivery:g}x-{max_relative_delivery:g}x."
     if filter_id == "price_momentum_3d":
         min_momentum = float(values.get("minMomentum3D", 2))
         max_momentum = float(values.get("maxMomentum3D", 12))
@@ -411,8 +430,10 @@ def build_context(rows, index):
     window = rows[:index + 1]
     closes = [row["close"] for row in window]
     volumes = [row["volume"] for row in window]
+    delivery_quantities = [row.get("deliverable_qty") for row in window]
     current = rows[index]
     adv20 = avg(volumes[-21:-1])
+    avg_delivery_20 = avg_available(delivery_quantities[-21:-1])
     obv = obv_series(closes, volumes)
     return {
         "date": current["trade_date"],
@@ -420,6 +441,8 @@ def build_context(rows, index):
         "volume": current["volume"],
         "deliverable_qty": current.get("deliverable_qty"),
         "delivery_pct": current.get("delivery_pct"),
+        "avg_delivery_20": avg_delivery_20,
+        "relative_delivery": relative_to_avg(current.get("deliverable_qty"), avg_delivery_20),
         "adv20": adv20,
         "relative_volume": relative_to_avg(current["volume"], adv20),
         "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
@@ -431,19 +454,32 @@ def build_context(rows, index):
 def build_indicators(rows):
     closes = [row["close"] for row in rows]
     volumes = [row["volume"] for row in rows]
+    delivery_quantities = [row.get("deliverable_qty") for row in rows]
     obv = obv_series(closes, volumes)
     adv20 = [0] * len(rows)
     for index in range(20, len(rows)):
         adv20[index] = avg(volumes[index - 20:index])
     relative_volume = [0] * len(rows)
+    avg_delivery_20 = [0] * len(rows)
+    relative_delivery = [0] * len(rows)
     for index in range(len(rows)):
         relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
+        avg_delivery_20[index] = avg_available(delivery_quantities[index - 20:index]) if index >= 20 else 0
+        relative_delivery[index] = relative_to_avg(delivery_quantities[index], avg_delivery_20[index])
     momentum_3d = [0] * len(rows)
     obv_3d = [0] * len(rows)
     for index in range(3, len(rows)):
         momentum_3d[index] = pct(closes[index], closes[index - 3])
         obv_3d[index] = relative_to_avg(obv[index] - obv[index - 3], adv20[index])
-    return {"adv20": adv20, "relative_volume": relative_volume, "momentum_3d": momentum_3d, "obv_3d": obv_3d, "rsi14": rsi_series(closes, 14)}
+    return {
+        "adv20": adv20,
+        "relative_volume": relative_volume,
+        "avg_delivery_20": avg_delivery_20,
+        "relative_delivery": relative_delivery,
+        "momentum_3d": momentum_3d,
+        "obv_3d": obv_3d,
+        "rsi14": rsi_series(closes, 14),
+    }
 
 
 def build_backtest_context(rows, indicators, index):
@@ -454,6 +490,8 @@ def build_backtest_context(rows, indicators, index):
         "volume": current["volume"],
         "deliverable_qty": current.get("deliverable_qty"),
         "delivery_pct": current.get("delivery_pct"),
+        "avg_delivery_20": indicators["avg_delivery_20"][index],
+        "relative_delivery": indicators["relative_delivery"][index],
         "adv20": indicators["adv20"][index],
         "relative_volume": indicators["relative_volume"][index],
         "momentum_3d": indicators["momentum_3d"][index],
@@ -701,8 +739,13 @@ def avg(values):
     return sum(values) / len(values) if values else 0
 
 
+def avg_available(values):
+    filtered = [value for value in values if value is not None]
+    return avg(filtered)
+
+
 def relative_to_avg(value, average):
-    return (value / average) if average else 0
+    return (value / average) if value is not None and average else 0
 
 
 def rsi(values, period=14):
