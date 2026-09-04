@@ -759,6 +759,19 @@ function starterRules(defaultRule) {
         { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
       ],
     },
+    {
+      id: "rule_quiet_trend_compression",
+      name: "Quiet Trend Compression",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        { id: "range_compression_10d", values: { minCompression10D: 0, maxCompression10D: 12 } },
+        { id: "close_near_20d_high", values: { maxDistanceFrom20DHigh: 3 } },
+        { id: "ema_trend", values: { minEmaTrendChecks: 3 } },
+        { id: "atr_risk", values: { minAtrPct: 3, maxAtrPct: 6 } },
+        { id: "rsi14_range", values: { rsiMin: 50, rsiMax: 68 } },
+        { id: "obv_accumulation_3d", values: { minObv3D: 0.5, maxAbsMomentum3D: 8 } },
+      ],
+    },
   ];
 }
 
@@ -786,6 +799,9 @@ function starterRuleGroups() {
       "rule_breakout_trend_quality",
       "rule_obv_consolidation",
       "rule_momentum_controlled",
+    ]),
+    group("group_quiet_trend_watch", "Quiet Trend Watch", 1, [
+      "rule_quiet_trend_compression",
     ]),
   ].filter((group) => group.ruleIds.length);
 }
