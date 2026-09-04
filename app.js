@@ -478,6 +478,7 @@ function renderDetails() {
       <p>Close is ${formatPct(item.distanceFrom20DHigh || 0)} from 20D high Rs. ${formatMoney(item.high20D || 0)}.</p>
       <p>52W position is ${formatPlainPct(item.rangePosition52W || 0)} between low Rs. ${formatMoney(item.low52W || 0)} and high Rs. ${formatMoney(item.high52W || 0)}.</p>
       <p>EMA trend: close Rs. ${formatMoney(item.close)}, EMA9 Rs. ${formatMoney(item.ema9 || 0)}, EMA20 Rs. ${formatMoney(item.ema20 || 0)}, SMA50 Rs. ${formatMoney(item.sma50 || 0)}.</p>
+      <p>MACD: line ${formatSignedNumber(item.macdLine || 0)}, signal ${formatSignedNumber(item.macdSignal || 0)}, histogram ${formatSignedNumber(item.macdHistogram || 0)}, change ${formatSignedNumber(item.macdHistogramChange || 0)}.</p>
       <p>ATR risk is ${formatPlainPct(item.atrPct || 0)} with ATR14 Rs. ${formatMoney(item.atr14 || 0)}.</p>
       <p>3-day OBV change is ${Number(item.obv3D || 0).toFixed(2)}x of 20-day average volume.</p>
     </div>
@@ -694,6 +695,7 @@ function humanValues(selected) {
   if (selected.id === "range_compression_10d") return `10-day high-low range between ${values.minCompression10D}% and ${values.maxCompression10D}% of close`;
   if (selected.id === "rupee_liquidity") return `20D average traded value between Rs. ${values.minRupeeLiquidityCr} cr and Rs. ${values.maxRupeeLiquidityCr} cr`;
   if (selected.id === "ema_trend") return `At least ${values.minEmaTrendChecks} of 3 trend checks pass: close above EMA9, close above EMA20, EMA20 above SMA50`;
+  if (selected.id === "macd_bullish_momentum") return `MACD above signal, MACD line at least ${values.minMacdLine}, histogram at least ${values.minMacdHistogram}, histogram change at least ${values.minMacdHistogramChange}`;
   if (selected.id === "atr_risk") return `ATR 14 between ${values.minAtrPct}% and ${values.maxAtrPct}% of close`;
   if (selected.id === "obv_accumulation_3d") return `3-day OBV change at least ${values.minObv3D}x of 20D average volume while 3-day price move stays within +/-${values.maxAbsMomentum3D}%`;
   if (selected.id === "rsi14_range") return `RSI 14 between ${values.rsiMin} and ${values.rsiMax}`;
@@ -953,4 +955,9 @@ function formatPct(value) {
 
 function formatPlainPct(value) {
   return `${Number(value).toFixed(2)}%`;
+}
+
+function formatSignedNumber(value) {
+  const number = Number(value);
+  return `${number > 0 ? "+" : ""}${number.toFixed(2)}`;
 }

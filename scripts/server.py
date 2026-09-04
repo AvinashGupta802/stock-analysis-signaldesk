@@ -128,6 +128,17 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "macd_bullish_momentum",
+        "name": "MACD Bullish Momentum",
+        "category": "Momentum",
+        "meaning": "Keep stocks where MACD shows bullish momentum: MACD line above signal line and histogram improving.",
+        "fields": [
+            {"key": "minMacdLine", "label": "Min MACD line", "default": 0, "step": 0.1},
+            {"key": "minMacdHistogram", "label": "Min histogram", "default": 0, "step": 0.1},
+            {"key": "minMacdHistogramChange", "label": "Min histogram change", "default": 0, "step": 0.1},
+        ],
+    },
+    {
         "id": "atr_risk",
         "name": "ATR Risk / Volatility",
         "category": "Risk",
@@ -528,6 +539,10 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "ema9": ctx["ema9"],
         "ema20": ctx["ema20"],
         "sma50": ctx["sma50"],
+        "macdLine": ctx["macd_line"],
+        "macdSignal": ctx["macd_signal"],
+        "macdHistogram": ctx["macd_histogram"],
+        "macdHistogramChange": ctx["macd_histogram_change"],
         "atr14": ctx["atr14"],
         "atrPct": ctx["atr_pct"],
         "obv3D": ctx["obv_3d"],
@@ -605,6 +620,10 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
         "ema9": ctx["ema9"],
         "ema20": ctx["ema20"],
         "sma50": ctx["sma50"],
+        "macdLine": ctx["macd_line"],
+        "macdSignal": ctx["macd_signal"],
+        "macdHistogram": ctx["macd_histogram"],
+        "macdHistogramChange": ctx["macd_histogram_change"],
         "atr14": ctx["atr14"],
         "atrPct": ctx["atr_pct"],
         "obv3D": ctx["obv_3d"],
@@ -707,6 +726,17 @@ def evaluate_filter(ctx, selected):
         passed_count = sum(1 for item in checks if item)
         passed = passed_count >= min_checks
         return passed, f"EMA trend {passed_count}/3 checks passed; required >= {min_checks}."
+    if filter_id == "macd_bullish_momentum":
+        min_macd_line = float(values.get("minMacdLine", 0))
+        min_histogram = float(values.get("minMacdHistogram", 0))
+        min_histogram_change = float(values.get("minMacdHistogramChange", 0))
+        passed = (
+            ctx["macd_line"] > ctx["macd_signal"]
+            and ctx["macd_line"] >= min_macd_line
+            and ctx["macd_histogram"] >= min_histogram
+            and ctx["macd_histogram_change"] >= min_histogram_change
+        )
+        return passed, f"MACD {ctx['macd_line']:.2f}, signal {ctx['macd_signal']:.2f}, histogram {ctx['macd_histogram']:.2f}, histogram change {ctx['macd_histogram_change']:+.2f}; required MACD >= {min_macd_line:g}, histogram >= {min_histogram:g}, change >= {min_histogram_change:g}."
     if filter_id == "atr_risk":
         min_atr = float(values.get("minAtrPct", 0))
         max_atr = float(values.get("maxAtrPct", 8))
@@ -745,6 +775,7 @@ def build_context(rows, index):
     ema9 = ema_series(closes, 9)[-1]
     ema20 = ema_series(closes, 20)[-1]
     sma50 = avg(closes[-50:])
+    macd = macd_series(closes)
     atr14 = atr_series(window, 14)[-1]
     return {
         "date": current["trade_date"],
@@ -765,6 +796,10 @@ def build_context(rows, index):
         "ema9": ema9,
         "ema20": ema20,
         "sma50": sma50,
+        "macd_line": macd["line"][-1],
+        "macd_signal": macd["signal"][-1],
+        "macd_histogram": macd["histogram"][-1],
+        "macd_histogram_change": macd["histogram"][-1] - macd["histogram"][-2] if len(macd["histogram"]) >= 2 else 0,
         "atr14": atr14,
         "atr_pct": pct(current["close"] + atr14, current["close"]),
         "high_52w": high_52w,
@@ -784,6 +819,7 @@ def build_indicators(rows):
     obv = obv_series(closes, volumes)
     ema9 = ema_series(closes, 9)
     ema20 = ema_series(closes, 20)
+    macd = macd_series(closes)
     atr14 = atr_series(rows, 14)
     adv20 = [0] * len(rows)
     for index in range(20, len(rows)):
@@ -796,6 +832,7 @@ def build_indicators(rows):
     compression_10d = [0] * len(rows)
     rupee_liquidity_cr = [0] * len(rows)
     atr_pct = [0] * len(rows)
+    macd_histogram_change = [0] * len(rows)
     for index in range(len(rows)):
         relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
         avg_delivery_20[index] = avg_available(delivery_quantities[index - 20:index]) if index >= 20 else 0
@@ -805,6 +842,7 @@ def build_indicators(rows):
         compression_10d[index] = ((max(highs[max(0, index - 9):index + 1]) - min(lows[max(0, index - 9):index + 1])) / closes[index]) * 100 if closes[index] else 0
         rupee_liquidity_cr[index] = (closes[index] * adv20[index]) / 10_000_000
         atr_pct[index] = pct(closes[index] + atr14[index], closes[index])
+        macd_histogram_change[index] = macd["histogram"][index] - macd["histogram"][index - 1] if index else 0
     momentum_3d = [0] * len(rows)
     high_52w = [0] * len(rows)
     low_52w = [0] * len(rows)
@@ -836,6 +874,10 @@ def build_indicators(rows):
         "ema9": ema9,
         "ema20": ema20,
         "sma50": sma50,
+        "macd_line": macd["line"],
+        "macd_signal": macd["signal"],
+        "macd_histogram": macd["histogram"],
+        "macd_histogram_change": macd_histogram_change,
         "atr14": atr14,
         "atr_pct": atr_pct,
         "high_52w": high_52w,
@@ -867,6 +909,10 @@ def build_backtest_context(rows, indicators, index):
         "ema9": indicators["ema9"][index],
         "ema20": indicators["ema20"][index],
         "sma50": indicators["sma50"][index],
+        "macd_line": indicators["macd_line"][index],
+        "macd_signal": indicators["macd_signal"][index],
+        "macd_histogram": indicators["macd_histogram"][index],
+        "macd_histogram_change": indicators["macd_histogram_change"][index],
         "atr14": indicators["atr14"][index],
         "atr_pct": indicators["atr_pct"][index],
         "high_52w": indicators["high_52w"][index],
@@ -1187,6 +1233,15 @@ def ema_series(values, period):
         current = (value * multiplier) + (current * (1 - multiplier))
         out.append(current)
     return out
+
+
+def macd_series(values):
+    ema12 = ema_series(values, 12)
+    ema26 = ema_series(values, 26)
+    line = [fast - slow for fast, slow in zip(ema12, ema26)]
+    signal = ema_series(line, 9)
+    histogram = [macd - sig for macd, sig in zip(line, signal)]
+    return {"line": line, "signal": signal, "histogram": histogram}
 
 
 def atr_series(rows, period=14):
