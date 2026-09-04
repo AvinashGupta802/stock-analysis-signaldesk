@@ -66,7 +66,7 @@ def recent_winners(conn, lookback, limit, min_price, max_price):
         """
         SELECT id, symbol, COALESCE(name, symbol) AS name
         FROM instruments
-        WHERE exchange='NSE' AND series='EQ'
+        WHERE exchange='NSE' AND series='EQ' AND isin LIKE 'INE%'
         ORDER BY symbol
         """
     ).fetchall()

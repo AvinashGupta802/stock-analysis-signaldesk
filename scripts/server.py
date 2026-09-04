@@ -167,9 +167,11 @@ DEFAULT_RULE = {
 }
 
 BUILTIN_GROUPS = [
-    {"id": "all", "name": "All NSE Stocks", "description": "All imported NSE stocks.", "kind": "system"},
-    {"id": "liquid", "name": "NSE Liquid Stocks", "description": "NSE stocks with latest volume >= 100,000.", "kind": "system"},
+    {"id": "all", "name": "All NSE Stocks", "description": "NSE EQ company stocks only; ETFs and funds are excluded.", "kind": "system"},
+    {"id": "liquid", "name": "NSE Liquid Stocks", "description": "NSE EQ company stocks with latest volume >= 100,000.", "kind": "system"},
 ]
+
+NSE_COMPANY_STOCK_FILTER = "i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%'"
 
 GROUP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS stock_groups (
@@ -254,7 +256,7 @@ def get_bootstrap():
             SELECT MIN(d.trade_date) AS first_date, MAX(d.trade_date) AS last_date
             FROM daily_delivery d
             JOIN instruments i ON i.id = d.instrument_id
-            WHERE i.exchange = 'NSE' AND i.series = 'EQ'
+            WHERE i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%'
             """
         ).fetchone()
         stats = conn.execute(
@@ -264,15 +266,15 @@ def get_bootstrap():
               (SELECT COUNT(*)
                FROM daily_prices p
                JOIN instruments i ON i.id = p.instrument_id
-               WHERE i.exchange = 'NSE') AS price_count,
+               WHERE i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%') AS price_count,
               (SELECT COUNT(*)
                FROM daily_delivery d
                JOIN instruments i ON i.id = d.instrument_id
-               WHERE i.exchange = 'NSE') AS delivery_count,
+               WHERE i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%') AS delivery_count,
               MIN(first_trade_date) AS first_date,
               MAX(last_trade_date) AS last_date
-            FROM instruments
-            WHERE exchange = 'NSE'
+            FROM instruments i
+            WHERE i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%'
             """
         ).fetchone()
         dates = [
@@ -282,7 +284,7 @@ def get_bootstrap():
                 SELECT DISTINCT p.trade_date
                 FROM daily_prices p
                 JOIN instruments i ON i.id = p.instrument_id
-                WHERE i.exchange = 'NSE'
+                WHERE i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%'
                 ORDER BY p.trade_date DESC
                 LIMIT 260
                 """
@@ -1010,7 +1012,7 @@ def load_group_stocks(conn, group):
             SELECT i.id, i.symbol, COALESCE(i.name, i.symbol) AS name
             FROM instruments i
             JOIN daily_prices latest ON latest.instrument_id = i.id AND latest.trade_date = i.last_trade_date
-            WHERE i.exchange = 'NSE' AND i.series = 'EQ' {volume_clause}
+            WHERE {NSE_COMPANY_STOCK_FILTER} {volume_clause}
             ORDER BY i.symbol
             """
         ).fetchall()
@@ -1019,7 +1021,7 @@ def load_group_stocks(conn, group):
         SELECT i.id, i.symbol, COALESCE(i.name, i.symbol) AS name
         FROM stock_group_members m
         JOIN instruments i ON i.exchange = m.exchange AND i.symbol = m.symbol
-        WHERE m.group_id = ? AND i.exchange = 'NSE'
+        WHERE m.group_id = ? AND i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%'
         ORDER BY i.symbol
         """,
         (group,),
@@ -1068,7 +1070,7 @@ def save_custom_group(payload):
         missing = []
         for symbol in symbols:
             row = conn.execute(
-                "SELECT exchange, symbol, COALESCE(name, symbol) AS name FROM instruments WHERE exchange = 'NSE' AND symbol = ? LIMIT 1",
+                "SELECT exchange, symbol, COALESCE(name, symbol) AS name FROM instruments WHERE exchange = 'NSE' AND series = 'EQ' AND isin LIKE 'INE%' AND symbol = ? LIMIT 1",
                 (symbol,),
             ).fetchone()
             if not row:
