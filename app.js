@@ -12,6 +12,7 @@ const state = {
   activeRuleGroupIndex: 0,
   mode: "group",
   view: "analyze",
+  ignorePriceFilter: false,
   groupId: "all",
   date: null,
   search: "",
@@ -31,6 +32,7 @@ const el = {
   analysisRuleGroupSelect: document.querySelector("#analysisRuleGroupSelect"),
   analysisRuleLabel: document.querySelector("#analysisRuleLabel"),
   analysisGroupLabel: document.querySelector("#analysisGroupLabel"),
+  ignorePriceFilterInput: document.querySelector("#ignorePriceFilterInput"),
   ruleSelect: document.querySelector("#ruleSelect"),
   ruleNameInput: document.querySelector("#ruleNameInput"),
   saveRuleButton: document.querySelector("#saveRuleButton"),
@@ -107,6 +109,12 @@ function bindShell() {
   el.analysisRuleGroupSelect.addEventListener("change", () => {
     state.activeRuleGroupIndex = Number(el.analysisRuleGroupSelect.value);
     state.mode = "group";
+    state.backtest = null;
+    renderAll();
+    runScan();
+  });
+  el.ignorePriceFilterInput.addEventListener("change", () => {
+    state.ignorePriceFilter = el.ignorePriceFilterInput.checked;
     state.backtest = null;
     renderAll();
     runScan();
@@ -223,6 +231,7 @@ function renderAnalysisSelectors() {
   el.analysisRuleSelect.hidden = !usingRule;
   el.analysisGroupLabel.hidden = usingRule;
   el.analysisRuleGroupSelect.hidden = usingRule;
+  el.ignorePriceFilterInput.checked = state.ignorePriceFilter;
 }
 
 function renderRuleSelect() {
@@ -335,6 +344,7 @@ function renderRuleMeaning() {
       <div class="detail-block">
         <h3>Recommendation Group</h3>
         <p>A stock appears when at least ${group.minMatches || 1} selected rules pass. More matching rules means stronger agreement.</p>
+        ${state.ignorePriceFilter ? "<p>Price Range filters are ignored for this run.</p>" : ""}
         <ul>
           ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${formatNumber(item.filters.length)} filters</li>`).join("")}
         </ul>
@@ -350,6 +360,7 @@ function renderRuleMeaning() {
     <div class="detail-block">
       <h3>Rule Logic</h3>
       <p>A stock passes only when all selected filters pass.</p>
+      ${state.ignorePriceFilter ? "<p>Price Range filters are ignored for this run.</p>" : ""}
       <ul>
         ${rule.filters.map((selected) => {
           const definition = filterDefinition(selected.id);
@@ -481,7 +492,7 @@ async function runScan() {
 
 async function runRuleScan() {
   const payload = {
-    rule: currentRule(),
+    rule: ruleForRun(currentRule()),
     group: state.groupId,
     date: state.date,
     search: state.search,
@@ -517,11 +528,11 @@ async function runBacktest() {
       maxHoldDays: Number(el.maxHoldInput.value) || 5,
     };
     if (isGroupMode) {
-      payload.rules = rulesForCurrentGroup();
+      payload.rules = rulesForCurrentGroup().map(ruleForRun);
       payload.minMatches = currentRuleGroup().minMatches || 1;
       state.backtest = await postJson("/api/rule-group/backtest", payload);
     } else {
-      payload.rule = currentRule();
+      payload.rule = ruleForRun(currentRule());
       state.backtest = await postJson("/api/rule/backtest", payload);
     }
     renderBacktest();
@@ -576,7 +587,7 @@ async function runRuleGroupScan() {
     return;
   }
   const payload = {
-    rules: selectedRules,
+    rules: selectedRules.map(ruleForRun),
     minMatches: currentRuleGroup().minMatches || selectedRules.length,
     group: state.groupId,
     date: state.date,
@@ -599,6 +610,14 @@ async function runRuleGroupScan() {
 
 function filterDefinition(filterId) {
   return state.filterLibrary.find((filter) => filter.id === filterId);
+}
+
+function ruleForRun(rule) {
+  if (!state.ignorePriceFilter) return rule;
+  return {
+    ...rule,
+    filters: rule.filters.filter((filter) => filter.id !== "price_range"),
+  };
 }
 
 function saveCurrentRuleGroupFromUi() {
