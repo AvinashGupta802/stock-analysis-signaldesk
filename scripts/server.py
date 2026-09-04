@@ -226,6 +226,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": str(exc)}, 500)
         if parsed.path == "/api/groups":
             return self.send_json(save_custom_group(payload))
+        if parsed.path == "/api/groups/combine":
+            return self.send_json(combine_stock_groups(payload))
         return self.send_json({"error": "Not found"}, 404)
 
     def read_payload(self):
@@ -1083,6 +1085,48 @@ def save_custom_group(payload):
             added.append(row["symbol"])
         conn.commit()
     return {"id": group_id, "name": name, "added": added, "missing": missing}
+
+
+def combine_stock_groups(payload):
+    name = str(payload.get("name") or "").strip()
+    source_group_ids = [str(item).strip() for item in payload.get("sourceGroupIds") or [] if str(item).strip()]
+    if not name:
+        return {"error": "Group name is required"}
+    if not source_group_ids:
+        return {"error": "Select at least one source group"}
+    group_id = "custom_" + slugify(name)
+    with connect() as conn:
+        ensure_group_schema(conn)
+        members = {}
+        for source_group_id in source_group_ids:
+            if source_group_id == group_id:
+                continue
+            for row in load_group_stocks(conn, source_group_id):
+                members[row["symbol"]] = row
+        if not members:
+            return {"error": "No valid NSE company stocks found in selected groups"}
+        conn.execute(
+            """
+            INSERT INTO stock_groups (id, name, description, kind, source, updated_at)
+            VALUES (?, ?, ?, 'custom', 'combined_groups', CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, source = excluded.source, updated_at = CURRENT_TIMESTAMP
+            """,
+            (group_id, name, f"Combined from {len(source_group_ids)} stock groups - {len(members)} unique stocks"),
+        )
+        conn.execute("DELETE FROM stock_group_members WHERE group_id = ?", (group_id,))
+        for row in sorted(members.values(), key=lambda item: item["symbol"]):
+            conn.execute(
+                "INSERT OR REPLACE INTO stock_group_members (group_id, exchange, symbol, name) VALUES (?, 'NSE', ?, ?)",
+                (group_id, row["symbol"], row["name"]),
+            )
+        conn.commit()
+    return {
+        "id": group_id,
+        "name": name,
+        "sourceGroupIds": source_group_ids,
+        "added": sorted(members),
+        "count": len(members),
+    }
 
 
 def ensure_group_schema(conn):

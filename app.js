@@ -33,6 +33,10 @@ const el = {
   analysisRuleLabel: document.querySelector("#analysisRuleLabel"),
   analysisGroupLabel: document.querySelector("#analysisGroupLabel"),
   ignorePriceFilterInput: document.querySelector("#ignorePriceFilterInput"),
+  combinedGroupNameInput: document.querySelector("#combinedGroupNameInput"),
+  stockGroupSources: document.querySelector("#stockGroupSources"),
+  createCombinedGroupButton: document.querySelector("#createCombinedGroupButton"),
+  stockGroupStatus: document.querySelector("#stockGroupStatus"),
   ruleSelect: document.querySelector("#ruleSelect"),
   ruleNameInput: document.querySelector("#ruleNameInput"),
   saveRuleButton: document.querySelector("#saveRuleButton"),
@@ -119,6 +123,7 @@ function bindShell() {
     renderAll();
     runScan();
   });
+  el.createCombinedGroupButton.addEventListener("click", createCombinedStockGroup);
   el.ruleSelect.addEventListener("change", () => {
     state.activeRuleIndex = Number(el.ruleSelect.value);
     state.mode = "rule";
@@ -196,6 +201,7 @@ function bindShell() {
 function renderAll() {
   renderView();
   renderAnalysisSelectors();
+  renderStockGroupBuilder();
   renderRuleSelect();
   renderRuleGroupSelect();
   renderRuleGroupMembers();
@@ -232,6 +238,18 @@ function renderAnalysisSelectors() {
   el.analysisGroupLabel.hidden = usingRule;
   el.analysisRuleGroupSelect.hidden = usingRule;
   el.ignorePriceFilterInput.checked = state.ignorePriceFilter;
+}
+
+function renderStockGroupBuilder() {
+  el.stockGroupSources.innerHTML = state.groups.map((group) => `
+    <label class="check-item">
+      <input type="checkbox" data-stock-group-source="${escapeHtml(group.id)}" />
+      <span>
+        <strong>${escapeHtml(group.name)}</strong>
+        <small>${escapeHtml(group.description || "Stock group")}</small>
+      </span>
+    </label>
+  `).join("");
 }
 
 function renderRuleSelect() {
@@ -541,6 +559,30 @@ async function runBacktest() {
   } finally {
     el.backtestButton.disabled = false;
     el.backtestButton.textContent = "Backtest selection";
+  }
+}
+
+async function createCombinedStockGroup() {
+  const sourceGroupIds = Array.from(el.stockGroupSources.querySelectorAll("input[data-stock-group-source]:checked")).map((input) => input.dataset.stockGroupSource);
+  const name = el.combinedGroupNameInput.value.trim();
+  el.createCombinedGroupButton.disabled = true;
+  el.stockGroupStatus.textContent = "Creating combined group...";
+  try {
+    const result = await postJson("/api/groups/combine", { name, sourceGroupIds });
+    if (result.error) throw new Error(result.error);
+    const bootstrap = await fetchJson("/api/bootstrap");
+    state.groups = bootstrap.groups || [];
+    state.stats = bootstrap.stats;
+    state.groupId = result.id;
+    el.combinedGroupNameInput.value = "";
+    el.stockGroupStatus.textContent = `${result.name} created with ${formatNumber(result.count)} unique stocks.`;
+    state.view = "analyze";
+    renderAll();
+    runScan();
+  } catch (error) {
+    el.stockGroupStatus.textContent = error.message;
+  } finally {
+    el.createCombinedGroupButton.disabled = false;
   }
 }
 

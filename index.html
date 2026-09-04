@@ -19,6 +19,7 @@
 
         <nav class="view-tabs" aria-label="Workspace sections">
           <button class="view-tab active" type="button" data-view-button="analyze">Analyze</button>
+          <button class="view-tab" type="button" data-view-button="stockgroups">Stock Groups</button>
           <button class="view-tab" type="button" data-view-button="rules">Create Rules</button>
           <button class="view-tab" type="button" data-view-button="groups">Rule Groups</button>
         </nav>
@@ -66,6 +67,17 @@
         <section class="panel compact" data-view-section="analyze">
           <label for="groupSelect">Stock group</label>
           <select id="groupSelect"></select>
+        </section>
+
+        <section class="panel compact" data-view-section="stockgroups">
+          <label for="combinedGroupNameInput">New combined group name</label>
+          <input id="combinedGroupNameInput" type="text" placeholder="Example: My Index Watchlist" autocomplete="off" />
+          <div class="section-title compact-title">
+            <h2>Combine Existing Groups</h2>
+          </div>
+          <div id="stockGroupSources" class="check-list"></div>
+          <button id="createCombinedGroupButton" type="button">Create combined group</button>
+          <p id="stockGroupStatus" class="helper-text"></p>
         </section>
 
         <section class="panel compact" data-view-section="analyze">
@@ -184,6 +196,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-16"></script>
+    <script src="./app.js?v=builder-17"></script>
   </body>
 </html>

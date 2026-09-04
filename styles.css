@@ -197,6 +197,10 @@ button:disabled {
   font-size: 17px;
 }
 
+.compact-title {
+  margin-bottom: 2px;
+}
+
 .rule-list {
   flex: 1;
   overflow: auto;
