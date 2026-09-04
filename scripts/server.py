@@ -70,6 +70,22 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "multi_period_momentum",
+        "name": "Multi-Period Momentum",
+        "category": "Price Trend",
+        "meaning": "Keep stocks with user-defined positive or controlled movement across 1 week, 1 month, 3 month, and 6 month windows.",
+        "fields": [
+            {"key": "minMomentum1W", "label": "Min 1W return %", "default": 0, "step": 0.5},
+            {"key": "maxMomentum1W", "label": "Max 1W return %", "default": 15, "step": 0.5},
+            {"key": "minMomentum1M", "label": "Min 1M return %", "default": 5, "step": 0.5},
+            {"key": "maxMomentum1M", "label": "Max 1M return %", "default": 30, "step": 0.5},
+            {"key": "minMomentum3M", "label": "Min 3M return %", "default": 10, "step": 0.5},
+            {"key": "maxMomentum3M", "label": "Max 3M return %", "default": 60, "step": 0.5},
+            {"key": "minMomentum6M", "label": "Min 6M return %", "default": 15, "step": 0.5},
+            {"key": "maxMomentum6M", "label": "Max 6M return %", "default": 120, "step": 0.5},
+        ],
+    },
+    {
         "id": "range_position_52w",
         "name": "52W Range Position",
         "category": "Market Structure",
@@ -528,6 +544,10 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "adv20": ctx["adv20"],
         "relativeVolume": ctx["relative_volume"],
         "momentum3D": ctx["momentum_3d"],
+        "momentum1W": ctx["momentum_1w"],
+        "momentum1M": ctx["momentum_1m"],
+        "momentum3M": ctx["momentum_3m"],
+        "momentum6M": ctx["momentum_6m"],
         "high52W": ctx["high_52w"],
         "low52W": ctx["low_52w"],
         "rangePosition52W": ctx["range_position_52w"],
@@ -609,6 +629,10 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
         "adv20": ctx["adv20"],
         "relativeVolume": ctx["relative_volume"],
         "momentum3D": ctx["momentum_3d"],
+        "momentum1W": ctx["momentum_1w"],
+        "momentum1M": ctx["momentum_1m"],
+        "momentum3M": ctx["momentum_3m"],
+        "momentum6M": ctx["momentum_6m"],
         "high52W": ctx["high_52w"],
         "low52W": ctx["low_52w"],
         "rangePosition52W": ctx["range_position_52w"],
@@ -691,6 +715,16 @@ def evaluate_filter(ctx, selected):
         max_momentum = float(values.get("maxMomentum3D", 12))
         passed = min_momentum <= ctx["momentum_3d"] <= max_momentum
         return passed, f"3D price change {ctx['momentum_3d']:+.2f}%; required {min_momentum:g}%-{max_momentum:g}%."
+    if filter_id == "multi_period_momentum":
+        ranges = [
+            ("1W", ctx["momentum_1w"], float(values.get("minMomentum1W", 0)), float(values.get("maxMomentum1W", 15))),
+            ("1M", ctx["momentum_1m"], float(values.get("minMomentum1M", 5)), float(values.get("maxMomentum1M", 30))),
+            ("3M", ctx["momentum_3m"], float(values.get("minMomentum3M", 10)), float(values.get("maxMomentum3M", 60))),
+            ("6M", ctx["momentum_6m"], float(values.get("minMomentum6M", 15)), float(values.get("maxMomentum6M", 120))),
+        ]
+        passed = all(min_value <= value <= max_value for _, value, min_value, max_value in ranges)
+        summary = ", ".join(f"{label} {value:+.2f}% required {min_value:g}%-{max_value:g}%" for label, value, min_value, max_value in ranges)
+        return passed, summary + "."
     if filter_id == "range_position_52w":
         min_range_position = float(values.get("minRangePosition52W", 70))
         max_range_position = float(values.get("maxRangePosition52W", 100))
@@ -788,6 +822,10 @@ def build_context(rows, index):
         "adv20": adv20,
         "relative_volume": relative_to_avg(current["volume"], adv20),
         "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
+        "momentum_1w": lookback_pct(rows, index, 5),
+        "momentum_1m": lookback_pct(rows, index, 21),
+        "momentum_3m": lookback_pct(rows, index, 63),
+        "momentum_6m": lookback_pct(rows, index, 126),
         "high_20d": high_20d,
         "distance_from_20d_high": pct(current["close"], high_20d),
         "close_position_day": range_position(current["close"], current["low"], current["high"]),
@@ -844,6 +882,10 @@ def build_indicators(rows):
         atr_pct[index] = pct(closes[index] + atr14[index], closes[index])
         macd_histogram_change[index] = macd["histogram"][index] - macd["histogram"][index - 1] if index else 0
     momentum_3d = [0] * len(rows)
+    momentum_1w = [0] * len(rows)
+    momentum_1m = [0] * len(rows)
+    momentum_3m = [0] * len(rows)
+    momentum_6m = [0] * len(rows)
     high_52w = [0] * len(rows)
     low_52w = [0] * len(rows)
     range_position_52w = [50] * len(rows)
@@ -860,12 +902,21 @@ def build_indicators(rows):
     for index in range(3, len(rows)):
         momentum_3d[index] = pct(closes[index], closes[index - 3])
         obv_3d[index] = relative_to_avg(obv[index] - obv[index - 3], adv20[index])
+    for index in range(len(rows)):
+        momentum_1w[index] = pct(closes[index], closes[index - 5]) if index >= 5 else 0
+        momentum_1m[index] = pct(closes[index], closes[index - 21]) if index >= 21 else 0
+        momentum_3m[index] = pct(closes[index], closes[index - 63]) if index >= 63 else 0
+        momentum_6m[index] = pct(closes[index], closes[index - 126]) if index >= 126 else 0
     return {
         "adv20": adv20,
         "relative_volume": relative_volume,
         "avg_delivery_20": avg_delivery_20,
         "relative_delivery": relative_delivery,
         "momentum_3d": momentum_3d,
+        "momentum_1w": momentum_1w,
+        "momentum_1m": momentum_1m,
+        "momentum_3m": momentum_3m,
+        "momentum_6m": momentum_6m,
         "high_20d": high_20d,
         "distance_from_20d_high": distance_from_20d_high,
         "close_position_day": close_position_day,
@@ -901,6 +952,10 @@ def build_backtest_context(rows, indicators, index):
         "adv20": indicators["adv20"][index],
         "relative_volume": indicators["relative_volume"][index],
         "momentum_3d": indicators["momentum_3d"][index],
+        "momentum_1w": indicators["momentum_1w"][index],
+        "momentum_1m": indicators["momentum_1m"][index],
+        "momentum_3m": indicators["momentum_3m"][index],
+        "momentum_6m": indicators["momentum_6m"][index],
         "high_20d": indicators["high_20d"][index],
         "distance_from_20d_high": indicators["distance_from_20d_high"][index],
         "close_position_day": indicators["close_position_day"][index],
@@ -1221,6 +1276,10 @@ def relative_to_avg(value, average):
 def range_position(close, low, high):
     spread = high - low
     return ((close - low) / spread) * 100 if spread else 50
+
+
+def lookback_pct(rows, index, sessions):
+    return pct(rows[index]["close"], rows[index - sessions]["close"]) if index >= sessions else 0
 
 
 def ema_series(values, period):

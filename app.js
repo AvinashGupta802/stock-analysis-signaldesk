@@ -473,6 +473,7 @@ function renderDetails() {
       <p>Volume is ${Number(item.relativeVolume || 0).toFixed(2)}x of its 20-day average.</p>
       <p>20-day rupee liquidity is Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr.</p>
       <p>3-day price change is ${formatPct(item.momentum3D || 0)}.</p>
+      <p>Multi-period momentum: 1W ${formatPct(item.momentum1W || 0)}, 1M ${formatPct(item.momentum1M || 0)}, 3M ${formatPct(item.momentum3M || 0)}, 6M ${formatPct(item.momentum6M || 0)}.</p>
       <p>Close position in today's range is ${formatPlainPct(item.closePositionDay || 0)}.</p>
       <p>10-day range compression is ${formatPlainPct(item.compression10D || 0)}. Lower values mean the stock has been moving in a tighter range.</p>
       <p>Close is ${formatPct(item.distanceFrom20DHigh || 0)} from 20D high Rs. ${formatMoney(item.high20D || 0)}.</p>
@@ -689,6 +690,7 @@ function humanValues(selected) {
   if (selected.id === "delivery_pct_range") return `Delivery percentage between ${values.minDeliveryPct}% and ${values.maxDeliveryPct}%`;
   if (selected.id === "relative_delivery_qty") return `Today delivered quantity between ${values.minRelativeDelivery}x and ${values.maxRelativeDelivery}x of 20D average delivered quantity`;
   if (selected.id === "price_momentum_3d") return `3-day price change between ${values.minMomentum3D}% and ${values.maxMomentum3D}%`;
+  if (selected.id === "multi_period_momentum") return `1W ${values.minMomentum1W}% to ${values.maxMomentum1W}%, 1M ${values.minMomentum1M}% to ${values.maxMomentum1M}%, 3M ${values.minMomentum3M}% to ${values.maxMomentum3M}%, 6M ${values.minMomentum6M}% to ${values.maxMomentum6M}%`;
   if (selected.id === "range_position_52w") return `Close position between ${values.minRangePosition52W}% and ${values.maxRangePosition52W}% of 52-week range`;
   if (selected.id === "close_near_20d_high") return `Close within ${values.maxDistanceFrom20DHigh}% below the 20-day high`;
   if (selected.id === "close_position_day_range") return `Close position between ${values.minClosePositionDay}% and ${values.maxClosePositionDay}% of today's high-low range`;
