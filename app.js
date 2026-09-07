@@ -405,7 +405,7 @@ function renderRuleGroupMembers() {
       <input type="checkbox" data-rule-group-member="${escapeHtml(rule.id)}" ${group.ruleIds.includes(rule.id) ? "checked" : ""} />
       <span>
         <strong>${escapeHtml(rule.name)}</strong>
-        <small>${formatNumber(rule.filters.length)} filters</small>
+        <small>${escapeHtml(rule.description || `${formatNumber(signalFilters(rule).length)} signal filters`)}</small>
       </span>
     </label>
   `).join("");
@@ -505,9 +505,10 @@ function renderRuleMeaning() {
       <div class="detail-block">
         <h3>Recommendation Group</h3>
         <p>A stock appears when at least ${group.minMatches || 1} selected rules pass. More matching rules means stronger agreement.</p>
+        ${group.description ? `<p>${escapeHtml(group.description)}</p>` : ""}
         ${universeFilterSummary()}
         <ul>
-          ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${formatNumber(signalFilters(item).length)} signal filters</li>`).join("")}
+          ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${escapeHtml(item.description || `${formatNumber(signalFilters(item).length)} signal filters`)}</li>`).join("")}
         </ul>
       </div>
     `;
@@ -521,6 +522,7 @@ function renderRuleMeaning() {
     <div class="detail-block">
       <h3>Rule Logic</h3>
       <p>A stock passes only when all selected filters pass.</p>
+      ${rule.description ? `<p>${escapeHtml(rule.description)}</p>` : ""}
       ${universeFilterSummary()}
       <ul>
         ${signalFilters(rule).map((selected) => {
@@ -932,7 +934,7 @@ function humanValues(selected) {
 }
 
 function loadSavedRules(defaultRule, serverRules) {
-  const starters = starterRules(defaultRule);
+  const starters = withRuleIds(starterRules(defaultRule));
   const localRules = readLocalArray(STORAGE_KEY);
   if (Array.isArray(serverRules) && serverRules.length) {
     const savedRules = withRuleIds(serverRules);
@@ -976,6 +978,7 @@ function loadSavedRuleGroups(serverGroups) {
     const cleaned = serverGroups.map((group) => ({
       id: group.id || createId("group"),
       name: group.name || "Untitled Rule Group",
+      description: group.description || "",
       minMatches: Number(group.minMatches) || 1,
       ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
     })).filter((group) => group.ruleIds.length);
@@ -1025,6 +1028,7 @@ function cleanRuleGroups(groups, knownRuleIds) {
   return groups.map((group) => ({
     id: group.id || createId("group"),
     name: group.name || "Untitled Rule Group",
+    description: group.description || "",
     minMatches: Number(group.minMatches) || 1,
     ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
   })).filter((group) => group.ruleIds.length);
@@ -1083,6 +1087,7 @@ function defaultRuleGroups() {
   return [{
     id: "universal",
     name: "All Rules Agreement",
+    description: "Runs all available signal rules and highlights stocks where enough independent rules agree.",
     minMatches: Math.min(2, Math.max(1, state.rules.length)),
     ruleIds: state.rules.map((rule) => rule.id),
   }];
@@ -1268,6 +1273,46 @@ function starterRules(defaultRule) {
         { id: "cci14_strong_trend", values: { minCci14: 200, maxCci14: 999 } },
       ],
     },
+    {
+      id: "rule_delivery_atr_accumulation",
+      name: "Delivery ATR Accumulation",
+      description: "Finds stocks with very high delivery participation, unusually strong delivered quantity, and controlled volatility. Strongest in the Nifty500 safe backtest.",
+      filters: [
+        { id: "delivery_pct_range", values: { minDeliveryPct: 70, maxDeliveryPct: 100 } },
+        { id: "atr_risk", values: { minAtrPct: 3, maxAtrPct: 8 } },
+        { id: "relative_delivery_qty", values: { minRelativeDelivery: 2, maxRelativeDelivery: 999 } },
+      ],
+    },
+    {
+      id: "rule_delivery_mfi_strength",
+      name: "Delivery MFI Strength",
+      description: "Looks for high delivery conviction with controlled ATR and healthy money flow that is strong but not extremely overheated. Strongest in the Nifty500 safe backtest.",
+      filters: [
+        { id: "delivery_pct_range", values: { minDeliveryPct: 70, maxDeliveryPct: 100 } },
+        { id: "atr_risk", values: { minAtrPct: 3, maxAtrPct: 8 } },
+        { id: "mfi14_range", values: { mfiMin: 40, mfiMax: 70 } },
+      ],
+    },
+    {
+      id: "rule_delivery_volume_breakout",
+      name: "Delivery Volume Breakout",
+      description: "Finds stocks near the stronger part of their 52-week range where delivery is meaningful and volume expands sharply versus the 20-day average. Strongest in the liquid safe backtest.",
+      filters: [
+        { id: "delivery_pct_range", values: { minDeliveryPct: 50, maxDeliveryPct: 100 } },
+        { id: "relative_volume", values: { minRelativeVolume: 3, maxRelativeVolume: 999 } },
+        { id: "range_position_52w", values: { minRangePosition52W: 60, maxRangePosition52W: 100 } },
+      ],
+    },
+    {
+      id: "rule_delivery_momentum_confirmation",
+      name: "Delivery Momentum Confirmation",
+      description: "Looks for existing 3M and 6M uptrend where current delivery quantity expands strongly and delivery percentage is high. Strongest in the liquid safe backtest.",
+      filters: [
+        { id: "relative_delivery_qty", values: { minRelativeDelivery: 1.5, maxRelativeDelivery: 999 } },
+        { id: "multi_period_momentum", values: momentumValues({ useMomentum3M: true, useMomentum6M: true }) },
+        { id: "delivery_pct_range", values: { minDeliveryPct: 70, maxDeliveryPct: 100 } },
+      ],
+    },
   ];
 }
 
@@ -1300,9 +1345,10 @@ function momentumValues(overrides = {}) {
 
 function starterRuleGroups() {
   const availableIds = new Set(state.rules.map((rule) => rule.id));
-  const group = (id, name, minMatches, ruleIds) => ({
+  const group = (id, name, minMatches, ruleIds, description = "") => ({
     id,
     name,
+    description,
     minMatches,
     ruleIds: ruleIds.filter((ruleId) => availableIds.has(ruleId)),
   });
@@ -1359,7 +1405,19 @@ function starterRuleGroups() {
     ]),
     group("group_screenshot_momentum_proxy", "Screenshot: Momentum Stocks Proxy", 1, [
       "rule_screenshot_momentum_proxy",
-    ]),
+    ], "Proxy for the uploaded momentum-screen style: price jump, RSI strength, rising RSI, daily volume, EMA10 above EMA20, and high CCI."),
+    group("group_delivery_atr_accumulation", "Delivery ATR Accumulation", 1, [
+      "rule_delivery_atr_accumulation",
+    ], "Research candidate. It scans the selected stock group for high delivery conviction plus controlled ATR risk; backtested strongest on Nifty500."),
+    group("group_delivery_mfi_strength", "Delivery MFI Strength", 1, [
+      "rule_delivery_mfi_strength",
+    ], "Research candidate. It scans the selected stock group for high delivery conviction plus healthy money flow; backtested strongest on Nifty500."),
+    group("group_delivery_volume_breakout", "Delivery Volume Breakout", 1, [
+      "rule_delivery_volume_breakout",
+    ], "Research candidate. It scans the selected stock group for delivery-backed volume expansion near 52-week strength; backtested strongest on liquid stocks."),
+    group("group_delivery_momentum_confirmation", "Delivery Momentum Confirmation", 1, [
+      "rule_delivery_momentum_confirmation",
+    ], "Research candidate. It scans the selected stock group for long momentum confirmed by high delivery activity; backtested strongest on liquid stocks."),
   ].filter((group) => group.ruleIds.length);
 }
 
