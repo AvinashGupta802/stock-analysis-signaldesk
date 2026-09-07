@@ -25,6 +25,9 @@ const state = {
   backtest: null,
   defaultBacktest: null,
   strategySaveTimer: null,
+  scanSeq: 0,
+  isScanning: false,
+  scanLabel: "",
 };
 
 const el = {
@@ -433,9 +436,10 @@ function renderRuleMeaning() {
 }
 
 function renderStatus() {
-  el.statusText.textContent = state.stats
+  const baseStatus = state.stats
     ? `SQLite connected: ${formatNumber(state.stats.stock_count)} NSE stocks, ${formatNumber(state.stats.price_count)} EOD rows, ${formatNumber(state.stats.delivery_count || 0)} delivery rows.`
     : "SQLite connected.";
+  el.statusText.textContent = state.isScanning ? `${baseStatus} Latest scan running: ${state.scanLabel}.` : baseStatus;
 }
 
 function renderBacktestControls() {
@@ -553,11 +557,29 @@ function renderBacktest() {
 }
 
 async function runScan() {
-  if (state.mode === "group") return runRuleGroupScan();
-  return runRuleScan();
+  const seq = ++state.scanSeq;
+  state.isScanning = true;
+  state.scanLabel = scanLabel();
+  renderStatus();
+  try {
+    if (state.mode === "group") {
+      await runRuleGroupScan(seq);
+    } else {
+      await runRuleScan(seq);
+    }
+  } catch (error) {
+    if (seq === state.scanSeq) {
+      el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Scan failed: ${escapeHtml(error.message)}</td></tr>`;
+    }
+  } finally {
+    if (seq === state.scanSeq) {
+      state.isScanning = false;
+      renderStatus();
+    }
+  }
 }
 
-async function runRuleScan() {
+async function runRuleScan(seq) {
   const payload = {
     rule: ruleForRun(currentRule()),
     universeFilters: universeFiltersForRun(),
@@ -568,11 +590,13 @@ async function runRuleScan() {
   };
   el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
+  if (seq !== state.scanSeq) return;
   state.results = result.results || [];
   state.metrics = result.metrics || {};
   state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
   if (state.selectedSymbol) {
     const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(state.selectedSymbol)}&date=${encodeURIComponent(state.date)}`);
+    if (seq !== state.scanSeq) return;
     state.prices = prices.prices || [];
   } else {
     state.prices = [];
@@ -669,7 +693,7 @@ function rulesForCurrentGroup() {
   return group.ruleIds.map((id) => state.rules.find((rule) => rule.id === id)).filter((rule) => rule && signalFilters(rule).length);
 }
 
-async function runRuleGroupScan() {
+async function runRuleGroupScan(seq) {
   const selectedRules = rulesForCurrentGroup();
   if (!selectedRules.length) {
     state.results = [];
@@ -690,16 +714,24 @@ async function runRuleGroupScan() {
   };
   el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Running rule group...</td></tr>`;
   const result = await postJson("/api/rule-group/results", payload);
+  if (seq !== state.scanSeq) return;
   state.results = result.results || [];
   state.metrics = result.metrics || {};
   state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
   if (state.selectedSymbol) {
     const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(state.selectedSymbol)}&date=${encodeURIComponent(state.date)}`);
+    if (seq !== state.scanSeq) return;
     state.prices = prices.prices || [];
   } else {
     state.prices = [];
   }
   renderAll();
+}
+
+function scanLabel() {
+  const stockGroup = state.groups.find((group) => group.id === state.groupId)?.name || state.groupId;
+  const strategy = state.mode === "group" ? currentRuleGroup().name : currentRule().name;
+  return `${stockGroup} / ${strategy} / ${formatDate(state.date)}`;
 }
 
 function filterDefinition(filterId) {
