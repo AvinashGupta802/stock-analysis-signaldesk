@@ -635,6 +635,25 @@ input[type="search"] {
   line-height: 1.35;
 }
 
+.filter-help {
+  border-left: 3px solid #c8d8cf;
+  padding-left: 10px;
+}
+
+.filter-help summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.filter-help p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 7px 0 0;
+}
+
 .selected-rule {
   padding: 12px;
   border: 1px solid var(--line);

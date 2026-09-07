@@ -1,6 +1,101 @@
 const STORAGE_KEY = "signaldesk.buyRules.v1";
 const RULE_GROUP_STORAGE_KEY = "signaldesk.ruleGroups.v1";
 
+const FILTER_EXPLANATIONS = {
+  adv20_min: [
+    "20D Average Volume is the average number of shares traded per day over the last 20 trading sessions.",
+    "Use it as a liquidity filter so the app avoids stocks where entry and exit may be difficult.",
+  ],
+  daily_volume_range: [
+    "Daily Volume is the actual traded quantity on the selected signal date.",
+    "A minimum value removes very inactive stocks. A maximum can avoid unusual one-day spikes if you want cleaner testing.",
+  ],
+  relative_volume: [
+    "This compares today's volume with the stock's own 20-day average volume.",
+    "Example: 1.5x means today's volume is 50% higher than normal, often showing fresh participation.",
+  ],
+  relative_volume_10d: [
+    "This compares today's volume with the faster 10-day average volume.",
+    "It reacts quicker than the 20D version and can be useful for short swing trades.",
+  ],
+  delivery_pct_range: [
+    "Delivery percentage estimates how much of the day's traded quantity was carried forward instead of squared off intraday.",
+    "Higher delivery can suggest positional buying, but very high delivery alone is not a buy signal.",
+  ],
+  relative_delivery_qty: [
+    "This compares today's delivered quantity with the stock's own 20-day average delivered quantity.",
+    "It is useful when absolute delivery buying increases even if delivery percentage does not look very high.",
+  ],
+  price_momentum_3d: [
+    "3-Day Price Momentum measures close-to-close price change over the last 3 trading sessions.",
+    "For breakout rules, a small or controlled 3D move can mean the stock paused before a fresh move.",
+  ],
+  price_change_1d: [
+    "1-Day Price Change measures today's close versus previous trading day's close.",
+    "A positive threshold finds stocks that already showed price action on the signal day.",
+  ],
+  multi_period_momentum: [
+    "Multi-Period Momentum checks returns across selected windows such as 15D, 1M, 3M, 6M, and 1Y.",
+    "Turn on only the periods you want. This helps find stocks where short-term strength agrees with the bigger trend.",
+  ],
+  range_position_52w: [
+    "52W Range Position tells where today's close sits between the 52-week low and 52-week high.",
+    "A high value means the stock is near its yearly high; useful for strength and breakout-style rules.",
+  ],
+  close_near_20d_high: [
+    "This checks how close the stock is to its highest price of the last 20 trading sessions.",
+    "A small value means price is pressing near a recent breakout zone.",
+  ],
+  close_position_day_range: [
+    "This checks where the close landed within today's high-low range.",
+    "A high value means the stock closed near the day's high, showing buyers held control into the close.",
+  ],
+  range_compression_10d: [
+    "10D Range Compression measures how narrow the last 10 trading days' high-low range is compared with price.",
+    "Low compression can show a quiet pause. Breakouts after compression can be useful for 2-10 day trades.",
+  ],
+  rupee_liquidity: [
+    "Rupee Liquidity estimates average traded value: close price multiplied by 20D average volume, shown in crore.",
+    "It is often better than raw volume when comparing high-price and low-price stocks.",
+  ],
+  ema_trend: [
+    "EMA Trend has 3 checks: close above EMA9, close above EMA20, and EMA20 above SMA50.",
+    "Min trend checks decides strictness. 3 is strict; 2 is flexible and may catch earlier moves.",
+  ],
+  rsi14_rising: [
+    "RSI 14 Rising checks whether today's RSI is higher than previous trading day's RSI.",
+    "It looks for improving momentum, not just a high RSI value.",
+  ],
+  ema10_above_ema20: [
+    "This checks whether the faster EMA10 is above EMA20.",
+    "It suggests the short-term trend is stronger than the medium-term trend.",
+  ],
+  macd_bullish_momentum: [
+    "MACD Bullish Momentum checks whether MACD is above its signal line and the histogram is improving.",
+    "It is a trend-momentum confirmation filter, usually better combined with price and volume filters.",
+  ],
+  atr_risk: [
+    "ATR Risk measures average daily volatility over 14 sessions as a percentage of close.",
+    "Low ATR may be too slow; very high ATR can be risky. For swing trades, a controlled range is usually better.",
+  ],
+  obv_accumulation_3d: [
+    "OBV Accumulation checks whether volume flow improved while price stayed relatively quiet for 3 days.",
+    "It tries to detect accumulation before a possible breakout.",
+  ],
+  rsi14_range: [
+    "RSI 14 Range filters stocks by momentum strength.",
+    "High RSI shows strength but can also be overheated, so using a range is safer than only demanding very high RSI.",
+  ],
+  mfi14_range: [
+    "Money Flow Index combines price and volume to estimate buying pressure over 14 sessions.",
+    "It behaves like a volume-weighted RSI. High values show strong money flow but may become overheated.",
+  ],
+  cci14_strong_trend: [
+    "CCI 14 compares price with its recent average range.",
+    "High CCI can identify strong bursts, but it should be tested with risk controls because bursts can reverse quickly.",
+  ],
+};
+
 const state = {
   groups: [],
   dates: [],
@@ -338,6 +433,7 @@ function renderFilterLibrary() {
     <div class="rule-item">
       <strong>${escapeHtml(filter.name)}</strong>
       <span>${escapeHtml(filter.category)}: ${escapeHtml(filter.meaning)}</span>
+      ${filterHelpMarkup(filter.id)}
       <button type="button" data-add-filter="${escapeHtml(filter.id)}">Add filter</button>
     </div>
   `).join("");
@@ -373,6 +469,7 @@ function renderSelectedFilters() {
       <div class="rule-item selected-rule">
         <strong>${escapeHtml(definition?.name || selected.id)}</strong>
         <span>${escapeHtml(definition?.meaning || "")}</span>
+        ${filterHelpMarkup(selected.id)}
         <div class="input-grid two-col">${fields}</div>
         <button type="button" data-remove-filter="${index}">Remove</button>
       </div>
@@ -736,6 +833,17 @@ function scanLabel() {
 
 function filterDefinition(filterId) {
   return state.filterLibrary.find((filter) => filter.id === filterId);
+}
+
+function filterHelpMarkup(filterId) {
+  const explanation = FILTER_EXPLANATIONS[filterId];
+  if (!explanation?.length) return "";
+  return `
+    <details class="filter-help">
+      <summary>What this means</summary>
+      ${explanation.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}
+    </details>
+  `;
 }
 
 function ruleForRun(rule) {
