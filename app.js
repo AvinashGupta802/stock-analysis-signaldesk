@@ -12,7 +12,9 @@ const state = {
   activeRuleGroupIndex: 0,
   mode: "group",
   view: "analyze",
-  ignorePriceFilter: false,
+  applyPriceFilter: false,
+  minUniversePrice: 100,
+  maxUniversePrice: 1000,
   groupId: "all",
   date: null,
   search: "",
@@ -22,6 +24,7 @@ const state = {
   selectedSymbol: null,
   backtest: null,
   defaultBacktest: null,
+  strategySaveTimer: null,
 };
 
 const el = {
@@ -32,7 +35,9 @@ const el = {
   analysisRuleGroupSelect: document.querySelector("#analysisRuleGroupSelect"),
   analysisRuleLabel: document.querySelector("#analysisRuleLabel"),
   analysisGroupLabel: document.querySelector("#analysisGroupLabel"),
-  ignorePriceFilterInput: document.querySelector("#ignorePriceFilterInput"),
+  applyPriceFilterInput: document.querySelector("#applyPriceFilterInput"),
+  minUniversePriceInput: document.querySelector("#minUniversePriceInput"),
+  maxUniversePriceInput: document.querySelector("#maxUniversePriceInput"),
   combinedGroupNameInput: document.querySelector("#combinedGroupNameInput"),
   stockGroupSources: document.querySelector("#stockGroupSources"),
   createCombinedGroupButton: document.querySelector("#createCombinedGroupButton"),
@@ -82,10 +87,12 @@ async function init() {
   state.stats = bootstrap.stats;
   state.filterLibrary = bootstrap.filterLibrary || [];
   state.defaultBacktest = bootstrap.defaultBacktest || {};
-  state.rules = loadSavedRules(bootstrap.defaultRule);
-  state.ruleGroups = loadSavedRuleGroups();
-  state.groupId = state.groups[0]?.id || "all";
+  state.rules = loadSavedRules(bootstrap.defaultRule, bootstrap.strategy?.rules);
+  state.ruleGroups = loadSavedRuleGroups(bootstrap.strategy?.ruleGroups);
+  applyStrategySettings(bootstrap.strategy?.settings);
+  state.groupId = state.groups.find((group) => group.id === state.groupId)?.id || state.groups[0]?.id || "all";
   state.date = state.dates[state.dates.length - 1];
+  saveStrategySoon();
   renderAll();
   await runScan();
 }
@@ -100,6 +107,7 @@ function bindShell() {
   el.analysisModeSelect.addEventListener("change", () => {
     state.mode = el.analysisModeSelect.value;
     state.backtest = null;
+    saveStrategySoon();
     renderAll();
     runScan();
   });
@@ -107,6 +115,7 @@ function bindShell() {
     state.activeRuleIndex = Number(el.analysisRuleSelect.value);
     state.mode = "rule";
     state.backtest = null;
+    saveStrategySoon();
     renderAll();
     runScan();
   });
@@ -114,12 +123,35 @@ function bindShell() {
     state.activeRuleGroupIndex = Number(el.analysisRuleGroupSelect.value);
     state.mode = "group";
     state.backtest = null;
+    saveStrategySoon();
     renderAll();
     runScan();
   });
-  el.ignorePriceFilterInput.addEventListener("change", () => {
-    state.ignorePriceFilter = el.ignorePriceFilterInput.checked;
+  el.applyPriceFilterInput.addEventListener("change", () => {
+    state.applyPriceFilter = el.applyPriceFilterInput.checked;
     state.backtest = null;
+    saveStrategySoon();
+    renderAll();
+    runScan();
+  });
+  [el.minUniversePriceInput, el.maxUniversePriceInput].forEach((input) => {
+    input.addEventListener("input", debounce(() => {
+      state.minUniversePrice = Number(el.minUniversePriceInput.value) || 0;
+      state.maxUniversePrice = Number(el.maxUniversePriceInput.value) || 0;
+      if (state.maxUniversePrice && state.maxUniversePrice < state.minUniversePrice) {
+        state.maxUniversePrice = state.minUniversePrice;
+        el.maxUniversePriceInput.value = state.maxUniversePrice;
+      }
+      saveStrategySoon();
+      state.backtest = null;
+      runScan();
+      renderRuleMeaning();
+    }, 300));
+  });
+  el.groupSelect.addEventListener("change", () => {
+    state.groupId = el.groupSelect.value;
+    state.backtest = null;
+    saveStrategySoon();
     renderAll();
     runScan();
   });
@@ -129,6 +161,7 @@ function bindShell() {
     state.mode = "rule";
     state.view = "rules";
     state.backtest = null;
+    saveStrategySoon();
     renderAll();
     runScan();
   });
@@ -154,6 +187,7 @@ function bindShell() {
     state.mode = "group";
     state.view = "groups";
     state.backtest = null;
+    saveStrategySoon();
     renderAll();
     runScan();
   });
@@ -179,10 +213,6 @@ function bindShell() {
     state.backtest = null;
     saveRuleGroups();
     renderAll();
-    runScan();
-  });
-  el.groupSelect.addEventListener("change", () => {
-    state.groupId = el.groupSelect.value;
     runScan();
   });
   el.dateSelect.addEventListener("change", () => {
@@ -237,7 +267,9 @@ function renderAnalysisSelectors() {
   el.analysisRuleSelect.hidden = !usingRule;
   el.analysisGroupLabel.hidden = usingRule;
   el.analysisRuleGroupSelect.hidden = usingRule;
-  el.ignorePriceFilterInput.checked = state.ignorePriceFilter;
+  el.applyPriceFilterInput.checked = state.applyPriceFilter;
+  el.minUniversePriceInput.value = state.minUniversePrice;
+  el.maxUniversePriceInput.value = state.maxUniversePrice;
 }
 
 function renderStockGroupBuilder() {
@@ -299,7 +331,7 @@ function renderSelectors() {
 }
 
 function renderFilterLibrary() {
-  el.filterLibrary.innerHTML = state.filterLibrary.map((filter) => `
+  el.filterLibrary.innerHTML = state.filterLibrary.filter((filter) => filter.id !== "price_range").map((filter) => `
     <div class="rule-item">
       <strong>${escapeHtml(filter.name)}</strong>
       <span>${escapeHtml(filter.category)}: ${escapeHtml(filter.meaning)}</span>
@@ -319,11 +351,21 @@ function renderSelectedFilters() {
   }
   el.selectedFilters.innerHTML = rule.filters.map((selected, index) => {
     const definition = filterDefinition(selected.id);
-    const fields = (definition?.fields || []).map((field) => `
-      <label>${escapeHtml(field.label)}
-        <input type="number" step="${field.step}" value="${selected.values[field.key]}" data-filter-index="${index}" data-field-key="${escapeHtml(field.key)}" />
-      </label>
-    `).join("");
+    const fields = (definition?.fields || []).map((field) => {
+      if (field.type === "checkbox") {
+        return `
+          <label class="inline-toggle filter-toggle">
+            <input type="checkbox" ${selected.values[field.key] ? "checked" : ""} data-filter-index="${index}" data-field-key="${escapeHtml(field.key)}" data-field-type="checkbox" />
+            <span>${escapeHtml(field.label)}</span>
+          </label>
+        `;
+      }
+      return `
+        <label>${escapeHtml(field.label)}
+          <input type="number" step="${field.step}" value="${selected.values[field.key]}" data-filter-index="${index}" data-field-key="${escapeHtml(field.key)}" data-field-type="number" />
+        </label>
+      `;
+    }).join("");
     return `
       <div class="rule-item selected-rule">
         <strong>${escapeHtml(definition?.name || selected.id)}</strong>
@@ -334,9 +376,10 @@ function renderSelectedFilters() {
     `;
   }).join("");
   el.selectedFilters.querySelectorAll("input[data-filter-index]").forEach((input) => {
-    input.addEventListener("input", debounce(() => {
+    const eventName = input.dataset.fieldType === "checkbox" ? "change" : "input";
+    input.addEventListener(eventName, debounce(() => {
       const filter = currentRule().filters[Number(input.dataset.filterIndex)];
-      filter.values[input.dataset.fieldKey] = Number(input.value) || 0;
+      filter.values[input.dataset.fieldKey] = input.dataset.fieldType === "checkbox" ? input.checked : Number(input.value) || 0;
       saveRules();
       runScan();
       renderRuleMeaning();
@@ -362,9 +405,9 @@ function renderRuleMeaning() {
       <div class="detail-block">
         <h3>Recommendation Group</h3>
         <p>A stock appears when at least ${group.minMatches || 1} selected rules pass. More matching rules means stronger agreement.</p>
-        ${state.ignorePriceFilter ? "<p>Price Range filters are ignored for this run.</p>" : ""}
+        ${universeFilterSummary()}
         <ul>
-          ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${formatNumber(item.filters.length)} filters</li>`).join("")}
+          ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${formatNumber(signalFilters(item).length)} signal filters</li>`).join("")}
         </ul>
       </div>
     `;
@@ -378,9 +421,9 @@ function renderRuleMeaning() {
     <div class="detail-block">
       <h3>Rule Logic</h3>
       <p>A stock passes only when all selected filters pass.</p>
-      ${state.ignorePriceFilter ? "<p>Price Range filters are ignored for this run.</p>" : ""}
+      ${universeFilterSummary()}
       <ul>
-        ${rule.filters.map((selected) => {
+        ${signalFilters(rule).map((selected) => {
           const definition = filterDefinition(selected.id);
           return `<li><strong>${escapeHtml(definition?.name || selected.id)}:</strong> ${escapeHtml(humanValues(selected))}</li>`;
         }).join("")}
@@ -418,7 +461,7 @@ function renderMetrics() {
 function renderTable() {
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
   if (!state.results.length) {
-    el.resultsBody.innerHTML = `<tr><td colspan="18" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
+    el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
@@ -431,6 +474,7 @@ function renderTable() {
       <td>${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}</td>
       <td>${Number(item.relativeDelivery || 0).toFixed(2)}x</td>
       <td class="${item.momentum3D > 0 ? "positive" : item.momentum3D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum3D || 0)}</td>
+      <td class="${item.momentum15D > 0 ? "positive" : item.momentum15D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum15D || 0)}</td>
       <td>${formatPlainPct(item.closePositionDay || 0)}</td>
       <td>${formatPlainPct(item.compression10D || 0)}</td>
       <td>${formatPct(item.distanceFrom20DHigh || 0)}</td>
@@ -438,6 +482,7 @@ function renderTable() {
       <td>${Number(item.obv3D || 0).toFixed(2)}x</td>
       <td>${formatNumber(item.adv20)}</td>
       <td>Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr</td>
+      <td class="${item.momentum1Y > 0 ? "positive" : item.momentum1Y < 0 ? "negative" : "neutral"}">${formatPct(item.momentum1Y || 0)}</td>
       <td>${Number(item.rsi14).toFixed(2)}</td>
       <td>${formatPlainPct(item.atrPct || 0)}</td>
       <td class="${item.nextDayReturn > 0 ? "positive" : item.nextDayReturn < 0 ? "negative" : "neutral"}">${item.nextDayReturn == null ? "Pending" : formatPct(item.nextDayReturn)}</td>
@@ -470,18 +515,20 @@ function renderDetails() {
       <h3>Delivery</h3>
       <p>Delivery ${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}${item.deliverableQty == null ? "" : `, delivered quantity ${formatNumber(item.deliverableQty)}`}.</p>
       <p>Delivered quantity is ${Number(item.relativeDelivery || 0).toFixed(2)}x of its 20-day average${item.avgDelivery20 ? ` (${formatNumber(item.avgDelivery20)})` : ""}.</p>
-      <p>Volume is ${Number(item.relativeVolume || 0).toFixed(2)}x of its 20-day average.</p>
+      <p>Volume is ${Number(item.relativeVolume10D || 0).toFixed(2)}x of its 10-day average and ${Number(item.relativeVolume || 0).toFixed(2)}x of its 20-day average.</p>
       <p>20-day rupee liquidity is Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr.</p>
+      <p>1-day price change is ${formatPct(item.priceChange1D || 0)} versus the previous close.</p>
       <p>3-day price change is ${formatPct(item.momentum3D || 0)}.</p>
-      <p>Multi-period momentum: 1W ${formatPct(item.momentum1W || 0)}, 1M ${formatPct(item.momentum1M || 0)}, 3M ${formatPct(item.momentum3M || 0)}, 6M ${formatPct(item.momentum6M || 0)}.</p>
+      <p>Multi-period momentum: 1W ${formatPct(item.momentum1W || 0)}, 15D ${formatPct(item.momentum15D || 0)}, 1M ${formatPct(item.momentum1M || 0)}, 3M ${formatPct(item.momentum3M || 0)}, 6M ${formatPct(item.momentum6M || 0)}, 1Y ${formatPct(item.momentum1Y || 0)}, 6M-12M ${formatPct(item.momentum6MTo12M || 0)}.</p>
       <p>Close position in today's range is ${formatPlainPct(item.closePositionDay || 0)}.</p>
       <p>10-day range compression is ${formatPlainPct(item.compression10D || 0)}. Lower values mean the stock has been moving in a tighter range.</p>
       <p>Close is ${formatPct(item.distanceFrom20DHigh || 0)} from 20D high Rs. ${formatMoney(item.high20D || 0)}.</p>
       <p>52W position is ${formatPlainPct(item.rangePosition52W || 0)} between low Rs. ${formatMoney(item.low52W || 0)} and high Rs. ${formatMoney(item.high52W || 0)}.</p>
-      <p>EMA trend: close Rs. ${formatMoney(item.close)}, EMA9 Rs. ${formatMoney(item.ema9 || 0)}, EMA20 Rs. ${formatMoney(item.ema20 || 0)}, SMA50 Rs. ${formatMoney(item.sma50 || 0)}.</p>
+      <p>EMA trend: close Rs. ${formatMoney(item.close)}, EMA9 Rs. ${formatMoney(item.ema9 || 0)}, EMA10 Rs. ${formatMoney(item.ema10 || 0)}, EMA20 Rs. ${formatMoney(item.ema20 || 0)}, SMA50 Rs. ${formatMoney(item.sma50 || 0)}.</p>
       <p>MACD: line ${formatSignedNumber(item.macdLine || 0)}, signal ${formatSignedNumber(item.macdSignal || 0)}, histogram ${formatSignedNumber(item.macdHistogram || 0)}, change ${formatSignedNumber(item.macdHistogramChange || 0)}.</p>
       <p>ATR risk is ${formatPlainPct(item.atrPct || 0)} with ATR14 Rs. ${formatMoney(item.atr14 || 0)}.</p>
       <p>3-day OBV change is ${Number(item.obv3D || 0).toFixed(2)}x of 20-day average volume.</p>
+      <p>RSI 14 is ${Number(item.rsi14 || 0).toFixed(2)}, previous RSI was ${Number(item.previousRsi14 || 0).toFixed(2)}, MFI 14 is ${Number(item.mfi14 || 0).toFixed(2)}, and CCI 14 is ${formatSignedNumber(item.cci14 || 0)}.</p>
     </div>
     <div class="detail-block">
       <h3>Filter Results</h3>
@@ -513,12 +560,13 @@ async function runScan() {
 async function runRuleScan() {
   const payload = {
     rule: ruleForRun(currentRule()),
+    universeFilters: universeFiltersForRun(),
     group: state.groupId,
     date: state.date,
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="18" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Running rule...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -546,6 +594,7 @@ async function runBacktest() {
       targetPct: Number(el.targetInput.value) || 5,
       stopPct: Number(el.stopInput.value) || 5,
       maxHoldDays: Number(el.maxHoldInput.value) || 5,
+      universeFilters: universeFiltersForRun(),
     };
     if (isGroupMode) {
       payload.rules = rulesForCurrentGroup().map(ruleForRun);
@@ -599,7 +648,7 @@ async function selectStock(symbol) {
 function addFilter(filterId) {
   const definition = filterDefinition(filterId);
   if (!definition) return;
-  const values = Object.fromEntries(definition.fields.map((field) => [field.key, field.default]));
+  const values = defaultValuesForFilter(definition);
   currentRule().filters.push({ id: filterId, values });
   state.backtest = null;
   saveRules();
@@ -617,7 +666,7 @@ function currentRuleGroup() {
 
 function rulesForCurrentGroup() {
   const group = currentRuleGroup();
-  return group.ruleIds.map((id) => state.rules.find((rule) => rule.id === id)).filter(Boolean);
+  return group.ruleIds.map((id) => state.rules.find((rule) => rule.id === id)).filter((rule) => rule && signalFilters(rule).length);
 }
 
 async function runRuleGroupScan() {
@@ -633,12 +682,13 @@ async function runRuleGroupScan() {
   const payload = {
     rules: selectedRules.map(ruleForRun),
     minMatches: currentRuleGroup().minMatches || selectedRules.length,
+    universeFilters: universeFiltersForRun(),
     group: state.groupId,
     date: state.date,
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="18" class="empty-state">Running rule group...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Running rule group...</td></tr>`;
   const result = await postJson("/api/rule-group/results", payload);
   state.results = result.results || [];
   state.metrics = result.metrics || {};
@@ -657,11 +707,30 @@ function filterDefinition(filterId) {
 }
 
 function ruleForRun(rule) {
-  if (!state.ignorePriceFilter) return rule;
   return {
     ...rule,
-    filters: rule.filters.filter((filter) => filter.id !== "price_range"),
+    filters: signalFilters(rule),
   };
+}
+
+function signalFilters(rule) {
+  return (rule?.filters || []).filter((filter) => filter.id !== "price_range");
+}
+
+function universeFiltersForRun() {
+  if (!state.applyPriceFilter) return [];
+  return [{
+    id: "price_range",
+    values: {
+      minPrice: state.minUniversePrice,
+      maxPrice: state.maxUniversePrice || 999999,
+    },
+  }];
+}
+
+function universeFilterSummary() {
+  if (!state.applyPriceFilter) return "<p>Universe filter: selected stock group only. Price filter is off.</p>";
+  return `<p>Universe filter: selected stock group, then close between Rs. ${state.minUniversePrice} and Rs. ${state.maxUniversePrice || 999999}.</p>`;
 }
 
 function saveCurrentRuleGroupFromUi() {
@@ -686,28 +755,58 @@ function humanValues(selected) {
   const values = selected.values || {};
   if (selected.id === "price_range") return `Close between Rs. ${values.minPrice} and Rs. ${values.maxPrice}`;
   if (selected.id === "adv20_min") return `20D average volume at least ${formatNumber(values.minAdv20)}`;
+  if (selected.id === "daily_volume_range") return `Daily traded volume between ${formatNumber(values.minDailyVolume)} and ${formatNumber(values.maxDailyVolume)} shares`;
   if (selected.id === "relative_volume") return `Today volume between ${values.minRelativeVolume}x and ${values.maxRelativeVolume}x of 20D average volume`;
+  if (selected.id === "relative_volume_10d") return `Today volume between ${values.minRelativeVolume10D}x and ${values.maxRelativeVolume10D}x of faster 10D average volume`;
   if (selected.id === "delivery_pct_range") return `Delivery percentage between ${values.minDeliveryPct}% and ${values.maxDeliveryPct}%`;
   if (selected.id === "relative_delivery_qty") return `Today delivered quantity between ${values.minRelativeDelivery}x and ${values.maxRelativeDelivery}x of 20D average delivered quantity`;
   if (selected.id === "price_momentum_3d") return `3-day price change between ${values.minMomentum3D}% and ${values.maxMomentum3D}%`;
-  if (selected.id === "multi_period_momentum") return `1W ${values.minMomentum1W}% to ${values.maxMomentum1W}%, 1M ${values.minMomentum1M}% to ${values.maxMomentum1M}%, 3M ${values.minMomentum3M}% to ${values.maxMomentum3M}%, 6M ${values.minMomentum6M}% to ${values.maxMomentum6M}%`;
+  if (selected.id === "price_change_1d") return `Today's close changed between ${values.minPriceChange1D}% and ${values.maxPriceChange1D}% versus previous close`;
+  if (selected.id === "multi_period_momentum") {
+    const periods = [
+      values.useMomentum1W ? `1W ${values.minMomentum1W}% to ${values.maxMomentum1W}%` : null,
+      values.useMomentum15D ? `15D ${values.minMomentum15D}% to ${values.maxMomentum15D}%` : null,
+      values.useMomentum1M ? `1M ${values.minMomentum1M}% to ${values.maxMomentum1M}%` : null,
+      values.useMomentum3M ? `3M ${values.minMomentum3M}% to ${values.maxMomentum3M}%` : null,
+      values.useMomentum6M ? `6M ${values.minMomentum6M}% to ${values.maxMomentum6M}%` : null,
+      values.useMomentum1Y ? `1Y ${values.minMomentum1Y}% to ${values.maxMomentum1Y}%` : null,
+      values.useMomentum6MTo12M ? `6M-12M ${values.minMomentum6MTo12M}% to ${values.maxMomentum6MTo12M}%` : null,
+    ].filter(Boolean);
+    return periods.length ? periods.join(", ") : "No momentum period selected";
+  }
   if (selected.id === "range_position_52w") return `Close position between ${values.minRangePosition52W}% and ${values.maxRangePosition52W}% of 52-week range`;
   if (selected.id === "close_near_20d_high") return `Close within ${values.maxDistanceFrom20DHigh}% below the 20-day high`;
   if (selected.id === "close_position_day_range") return `Close position between ${values.minClosePositionDay}% and ${values.maxClosePositionDay}% of today's high-low range`;
   if (selected.id === "range_compression_10d") return `10-day high-low range between ${values.minCompression10D}% and ${values.maxCompression10D}% of close`;
   if (selected.id === "rupee_liquidity") return `20D average traded value between Rs. ${values.minRupeeLiquidityCr} cr and Rs. ${values.maxRupeeLiquidityCr} cr`;
   if (selected.id === "ema_trend") return `At least ${values.minEmaTrendChecks} of 3 trend checks pass: close above EMA9, close above EMA20, EMA20 above SMA50`;
+  if (selected.id === "rsi14_rising") return `RSI 14 must rise by more than ${values.minRsiRise} points versus previous trading day`;
+  if (selected.id === "ema10_above_ema20") return `EMA10 must be above EMA20 by at least ${values.minEmaGapPct}%`;
   if (selected.id === "macd_bullish_momentum") return `MACD above signal, MACD line at least ${values.minMacdLine}, histogram at least ${values.minMacdHistogram}, histogram change at least ${values.minMacdHistogramChange}`;
   if (selected.id === "atr_risk") return `ATR 14 between ${values.minAtrPct}% and ${values.maxAtrPct}% of close`;
   if (selected.id === "obv_accumulation_3d") return `3-day OBV change at least ${values.minObv3D}x of 20D average volume while 3-day price move stays within +/-${values.maxAbsMomentum3D}%`;
   if (selected.id === "rsi14_range") return `RSI 14 between ${values.rsiMin} and ${values.rsiMax}`;
+  if (selected.id === "mfi14_range") return `Money Flow Index 14 between ${values.mfiMin} and ${values.mfiMax}; higher values show stronger price-volume buying pressure`;
+  if (selected.id === "cci14_strong_trend") return `CCI 14 between ${values.minCci14} and ${values.maxCci14}; higher values show stronger price action versus recent range`;
   return JSON.stringify(values);
 }
 
-function loadSavedRules(defaultRule) {
+function loadSavedRules(defaultRule, serverRules) {
   const starters = starterRules(defaultRule);
+  const localRules = readLocalArray(STORAGE_KEY);
+  if (Array.isArray(serverRules) && serverRules.length) {
+    const savedRules = withRuleIds(serverRules);
+    const ids = new Set(savedRules.map((rule) => rule.id));
+    const names = new Set(savedRules.map((rule) => rule.name));
+    const localMerged = withRuleIds(localRules).filter((rule) => !ids.has(rule.id) && !names.has(rule.name));
+    localMerged.forEach((rule) => {
+      ids.add(rule.id);
+      names.add(rule.name);
+    });
+    return [...savedRules, ...localMerged, ...starters.filter((rule) => !ids.has(rule.id) && !names.has(rule.name))];
+  }
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    const saved = localRules;
     if (Array.isArray(saved) && saved.length) {
       const savedRules = withRuleIds(saved);
       const names = new Set(savedRules.map((rule) => rule.name));
@@ -726,20 +825,36 @@ function loadSavedRules(defaultRule) {
 
 function saveRules() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.rules));
+  saveStrategySoon();
 }
 
-function loadSavedRuleGroups() {
+function loadSavedRuleGroups(serverGroups) {
   const templates = starterRuleGroups();
+  const localGroups = readLocalArray(RULE_GROUP_STORAGE_KEY);
+  if (Array.isArray(serverGroups) && serverGroups.length) {
+    const knownRuleIds = new Set(state.rules.map((rule) => rule.id));
+    const cleaned = serverGroups.map((group) => ({
+      id: group.id || createId("group"),
+      name: group.name || "Untitled Rule Group",
+      minMatches: Number(group.minMatches) || 1,
+      ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
+    })).filter((group) => group.ruleIds.length);
+    if (cleaned.length) {
+      const ids = new Set(cleaned.map((group) => group.id));
+      const names = new Set(cleaned.map((group) => group.name));
+      const localMerged = cleanRuleGroups(localGroups, knownRuleIds).filter((group) => !ids.has(group.id) && !names.has(group.name));
+      localMerged.forEach((group) => {
+        ids.add(group.id);
+        names.add(group.name);
+      });
+      return [...cleaned, ...localMerged, ...templates.filter((group) => !ids.has(group.id) && !names.has(group.name) && group.ruleIds.length)];
+    }
+  }
   try {
-    const saved = JSON.parse(localStorage.getItem(RULE_GROUP_STORAGE_KEY) || "[]");
+    const saved = localGroups;
     if (Array.isArray(saved) && saved.length) {
       const knownRuleIds = new Set(state.rules.map((rule) => rule.id));
-      const cleaned = saved.map((group) => ({
-        id: group.id || createId("group"),
-        name: group.name || "Untitled Rule Group",
-        minMatches: Number(group.minMatches) || 1,
-        ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
-      })).filter((group) => group.ruleIds.length);
+      const cleaned = cleanRuleGroups(saved, knownRuleIds);
       if (cleaned.length) {
         const ids = new Set(cleaned.map((group) => group.id));
         const names = new Set(cleaned.map((group) => group.name));
@@ -756,8 +871,72 @@ function loadSavedRuleGroups() {
   return groups;
 }
 
+function readLocalArray(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch (error) {
+    console.warn(`Could not read ${key}`, error);
+    return [];
+  }
+}
+
+function cleanRuleGroups(groups, knownRuleIds) {
+  return groups.map((group) => ({
+    id: group.id || createId("group"),
+    name: group.name || "Untitled Rule Group",
+    minMatches: Number(group.minMatches) || 1,
+    ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
+  })).filter((group) => group.ruleIds.length);
+}
+
 function saveRuleGroups() {
   localStorage.setItem(RULE_GROUP_STORAGE_KEY, JSON.stringify(state.ruleGroups));
+  saveStrategySoon();
+}
+
+function applyStrategySettings(settings = {}) {
+  state.mode = settings.mode === "rule" ? "rule" : "group";
+  state.groupId = settings.groupId || state.groupId;
+  state.activeRuleIndex = clampIndex(Number(settings.activeRuleIndex) || 0, state.rules.length);
+  state.activeRuleGroupIndex = clampIndex(Number(settings.activeRuleGroupIndex) || 0, state.ruleGroups.length);
+  state.applyPriceFilter = Boolean(settings.applyPriceFilter);
+  state.minUniversePrice = Number(settings.minUniversePrice) || 100;
+  state.maxUniversePrice = Number(settings.maxUniversePrice) || 1000;
+}
+
+function currentStrategyPayload() {
+  return {
+    rules: state.rules,
+    ruleGroups: state.ruleGroups,
+    settings: {
+      mode: state.mode,
+      groupId: state.groupId,
+      activeRuleIndex: state.activeRuleIndex,
+      activeRuleGroupIndex: state.activeRuleGroupIndex,
+      applyPriceFilter: state.applyPriceFilter,
+      minUniversePrice: state.minUniversePrice,
+      maxUniversePrice: state.maxUniversePrice,
+    },
+  };
+}
+
+function saveStrategySoon() {
+  clearTimeout(state.strategySaveTimer);
+  state.strategySaveTimer = setTimeout(saveStrategyNow, 350);
+}
+
+async function saveStrategyNow() {
+  try {
+    await postJson("/api/strategy", currentStrategyPayload());
+  } catch (error) {
+    console.warn("Could not save strategy to SQLite", error);
+  }
+}
+
+function clampIndex(index, length) {
+  if (!length) return 0;
+  return Math.max(0, Math.min(index, length - 1));
 }
 
 function defaultRuleGroups() {
@@ -771,11 +950,6 @@ function defaultRuleGroups() {
 
 function starterRules(defaultRule) {
   return [
-    {
-      ...defaultRule,
-      id: "rule_price_range",
-      name: "Price Range Only",
-    },
     {
       id: "rule_volume_delivery_core",
       name: "Volume Delivery Core",
@@ -825,6 +999,40 @@ function starterRules(defaultRule) {
       ],
     },
     {
+      id: "rule_multi_period_trend",
+      name: "Multi-Period Trend",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
+        {
+          id: "multi_period_momentum",
+          values: {
+            useMomentum1W: false,
+            minMomentum1W: 0,
+            maxMomentum1W: 15,
+            useMomentum15D: true,
+            minMomentum15D: 2,
+            maxMomentum15D: 25,
+            useMomentum1M: false,
+            minMomentum1M: 5,
+            maxMomentum1M: 30,
+            useMomentum3M: true,
+            minMomentum3M: 10,
+            maxMomentum3M: 60,
+            useMomentum6M: false,
+            minMomentum6M: 15,
+            maxMomentum6M: 120,
+            useMomentum1Y: false,
+            minMomentum1Y: 20,
+            maxMomentum1Y: 250,
+            useMomentum6MTo12M: false,
+            minMomentum6MTo12M: -20,
+            maxMomentum6MTo12M: 80,
+          },
+        },
+        { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
+      ],
+    },
+    {
       id: "rule_quiet_trend_compression",
       name: "Quiet Trend Compression",
       filters: [
@@ -837,7 +1045,117 @@ function starterRules(defaultRule) {
         { id: "obv_accumulation_3d", values: { minObv3D: 0.5, maxAbsMomentum3D: 8 } },
       ],
     },
+    {
+      id: "rule_discovered_high_rsi_long_momentum_delivery",
+      name: "Discovered: High RSI Long Momentum Delivery",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
+        { id: "rsi14_range", values: { rsiMin: 70, rsiMax: 100 } },
+        { id: "multi_period_momentum", values: momentumValues({ useMomentum3M: true, useMomentum6M: true }) },
+        { id: "delivery_pct_range", values: { minDeliveryPct: 40, maxDeliveryPct: 100 } },
+      ],
+    },
+    {
+      id: "rule_discovered_long_momentum_cci_delivery",
+      name: "Discovered: Long Momentum CCI Delivery",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
+        { id: "multi_period_momentum", values: momentumValues({ useMomentum15D: true, useMomentum1Y: true }) },
+        { id: "delivery_pct_range", values: { minDeliveryPct: 40, maxDeliveryPct: 100 } },
+        { id: "cci14_strong_trend", values: { minCci14: 200, maxCci14: 999 } },
+      ],
+    },
+    {
+      id: "rule_discovered_52w_volume_rsi",
+      name: "Discovered: 52W High Volume RSI",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
+        { id: "range_position_52w", values: { minRangePosition52W: 70, maxRangePosition52W: 100 } },
+        { id: "relative_volume", values: { minRelativeVolume: 1.5, maxRelativeVolume: 999 } },
+        { id: "rsi14_range", values: { rsiMin: 60, rsiMax: 80 } },
+      ],
+    },
+    {
+      id: "rule_discovered_pause_breakout_volume",
+      name: "Discovered: Pause Breakout Volume",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
+        { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
+        { id: "price_momentum_3d", values: { minMomentum3D: -3, maxMomentum3D: 3 } },
+        { id: "relative_volume", values: { minRelativeVolume: 3, maxRelativeVolume: 999 } },
+      ],
+    },
+    {
+      id: "rule_deep_compression_ema_launch",
+      name: "Deep: Compression EMA Launch",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
+        { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
+        { id: "range_compression_10d", values: { minCompression10D: 0, maxCompression10D: 8 } },
+        { id: "ema_trend", values: { minEmaTrendChecks: 3 } },
+      ],
+    },
+    {
+      id: "rule_deep_10d_volume_near_high",
+      name: "Deep: 10D Volume Near High",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
+        { id: "relative_volume_10d", values: { minRelativeVolume10D: 3, maxRelativeVolume10D: 999 } },
+        { id: "price_momentum_3d", values: { minMomentum3D: -3, maxMomentum3D: 3 } },
+        { id: "range_position_52w", values: { minRangePosition52W: 80, maxRangePosition52W: 100 } },
+      ],
+    },
+    {
+      id: "rule_deep_mfi_cci_long_momentum",
+      name: "Deep: MFI CCI Long Momentum",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
+        { id: "multi_period_momentum", values: momentumValues({ useMomentum15D: true, useMomentum1Y: true }) },
+        { id: "mfi14_range", values: { mfiMin: 40, mfiMax: 70 } },
+        { id: "cci14_strong_trend", values: { minCci14: 200, maxCci14: 999 } },
+      ],
+    },
+    {
+      id: "rule_screenshot_momentum_proxy",
+      name: "Screenshot: Momentum Stocks Proxy",
+      filters: [
+        { id: "price_range", values: { minPrice: 100, maxPrice: 999999 } },
+        { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
+        { id: "rsi14_range", values: { rsiMin: 70, rsiMax: 100 } },
+        { id: "rsi14_rising", values: { minRsiRise: 0 } },
+        { id: "daily_volume_range", values: { minDailyVolume: 20000, maxDailyVolume: 999999999 } },
+        { id: "ema10_above_ema20", values: { minEmaGapPct: 0 } },
+        { id: "cci14_strong_trend", values: { minCci14: 200, maxCci14: 999 } },
+      ],
+    },
   ];
+}
+
+function momentumValues(overrides = {}) {
+  return {
+    useMomentum1W: false,
+    minMomentum1W: 0,
+    maxMomentum1W: 15,
+    useMomentum15D: false,
+    minMomentum15D: 2,
+    maxMomentum15D: 25,
+    useMomentum1M: false,
+    minMomentum1M: 5,
+    maxMomentum1M: 30,
+    useMomentum3M: false,
+    minMomentum3M: 10,
+    maxMomentum3M: 60,
+    useMomentum6M: false,
+    minMomentum6M: 15,
+    maxMomentum6M: 120,
+    useMomentum1Y: false,
+    minMomentum1Y: 20,
+    maxMomentum1Y: 250,
+    useMomentum6MTo12M: false,
+    minMomentum6MTo12M: -20,
+    maxMomentum6MTo12M: 80,
+    ...overrides,
+  };
 }
 
 function starterRuleGroups() {
@@ -859,6 +1177,7 @@ function starterRuleGroups() {
       "rule_breakout_trend_quality",
       "rule_delivery_accumulation",
       "rule_momentum_controlled",
+      "rule_multi_period_trend",
     ]),
     group("group_breakout_watch", "Breakout Watch", 2, [
       "rule_breakout_trend_quality",
@@ -868,18 +1187,72 @@ function starterRuleGroups() {
     group("group_quiet_trend_watch", "Quiet Trend Watch", 1, [
       "rule_quiet_trend_compression",
     ]),
+    group("group_discovered_trend_strength", "Discovered: Trend Strength Group", 1, [
+      "rule_discovered_high_rsi_long_momentum_delivery",
+      "rule_discovered_52w_volume_rsi",
+    ]),
+    group("group_discovered_strict_trend_agreement", "Discovered: Strict Trend Agreement", 2, [
+      "rule_discovered_high_rsi_long_momentum_delivery",
+      "rule_discovered_52w_volume_rsi",
+    ]),
+    group("group_discovered_momentum_burst", "Discovered: Momentum Burst Group", 1, [
+      "rule_discovered_long_momentum_cci_delivery",
+      "rule_discovered_pause_breakout_volume",
+    ]),
+    group("group_discovered_high_conviction_swing", "Discovered: High Conviction Swing", 2, [
+      "rule_discovered_high_rsi_long_momentum_delivery",
+      "rule_discovered_long_momentum_cci_delivery",
+      "rule_discovered_52w_volume_rsi",
+    ]),
+    group("group_deep_compression_breakout", "Deep: Compression Breakout Group", 1, [
+      "rule_deep_compression_ema_launch",
+      "rule_deep_10d_volume_near_high",
+    ]),
+    group("group_deep_mfi_momentum", "Deep: MFI Momentum Group", 1, [
+      "rule_deep_mfi_cci_long_momentum",
+      "rule_discovered_long_momentum_cci_delivery",
+    ]),
+    group("group_deep_high_conviction_research", "Deep: High Conviction Research", 2, [
+      "rule_deep_compression_ema_launch",
+      "rule_deep_10d_volume_near_high",
+      "rule_deep_mfi_cci_long_momentum",
+    ]),
+    group("group_screenshot_momentum_proxy", "Screenshot: Momentum Stocks Proxy", 1, [
+      "rule_screenshot_momentum_proxy",
+    ]),
   ].filter((group) => group.ruleIds.length);
 }
 
 function withRuleIds(rules) {
   let changed = false;
   const result = rules.map((rule) => {
-    if (rule.id) return rule;
+    const nextRule = {
+      ...rule,
+      filters: (rule.filters || []).map((filter) => {
+        if (filter.id === "price_range") {
+          changed = true;
+          return null;
+        }
+        const definition = filterDefinition(filter.id);
+        if (!definition) return filter;
+        const defaults = defaultValuesForFilter(definition);
+        const values = { ...defaults, ...(filter.values || {}) };
+        Object.keys(defaults).forEach((key) => {
+          if (filter.values?.[key] === undefined) changed = true;
+        });
+        return { ...filter, values };
+      }).filter(Boolean),
+    };
+    if (rule.id) return nextRule;
     changed = true;
-    return { ...rule, id: createId("rule") };
-  });
+    return { ...nextRule, id: createId("rule") };
+  }).filter((rule) => rule.filters.length);
   if (changed) localStorage.setItem(STORAGE_KEY, JSON.stringify(result));
   return result;
+}
+
+function defaultValuesForFilter(definition) {
+  return Object.fromEntries((definition.fields || []).map((field) => [field.key, field.default]));
 }
 
 function createId(prefix) {

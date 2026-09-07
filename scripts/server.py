@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 from collections import defaultdict
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +31,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "daily_volume_range",
+        "name": "Daily Volume Range",
+        "category": "Liquidity",
+        "meaning": "Keep stocks whose actual traded quantity today is within your chosen range. This is useful for avoiding very thinly traded stocks.",
+        "fields": [
+            {"key": "minDailyVolume", "label": "Min daily volume", "default": 20_000, "step": 1000},
+            {"key": "maxDailyVolume", "label": "Max daily volume", "default": 999_999_999, "step": 1000},
+        ],
+    },
+    {
         "id": "relative_volume",
         "name": "Volume vs 20D Avg",
         "category": "Participation",
@@ -37,6 +48,16 @@ FILTER_LIBRARY = [
         "fields": [
             {"key": "minRelativeVolume", "label": "Min relative volume", "default": 1.5, "step": 0.1},
             {"key": "maxRelativeVolume", "label": "Max relative volume", "default": 999, "step": 0.1},
+        ],
+    },
+    {
+        "id": "relative_volume_10d",
+        "name": "Volume vs 10D Avg",
+        "category": "Participation",
+        "meaning": "Keep stocks whose current day volume is higher or lower than their faster 10-day average volume, useful for spotting short-term interest.",
+        "fields": [
+            {"key": "minRelativeVolume10D", "label": "Min volume vs 10D avg", "default": 2, "step": 0.1},
+            {"key": "maxRelativeVolume10D", "label": "Max volume vs 10D avg", "default": 999, "step": 0.1},
         ],
     },
     {
@@ -70,19 +91,42 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "price_change_1d",
+        "name": "1-Day Price Change",
+        "category": "Price Action",
+        "meaning": "Keep stocks whose closing price moved up or down by your chosen percentage today compared with the previous trading day's close.",
+        "fields": [
+            {"key": "minPriceChange1D", "label": "Min 1D change %", "default": 1, "step": 0.5},
+            {"key": "maxPriceChange1D", "label": "Max 1D change %", "default": 999, "step": 0.5},
+        ],
+    },
+    {
         "id": "multi_period_momentum",
         "name": "Multi-Period Momentum",
         "category": "Price Trend",
-        "meaning": "Keep stocks with user-defined positive or controlled movement across 1 week, 1 month, 3 month, and 6 month windows.",
+        "meaning": "Keep stocks with user-selected positive or controlled movement across short and long lookback windows.",
         "fields": [
+            {"key": "useMomentum1W", "label": "Check 1W return", "default": True, "type": "checkbox"},
             {"key": "minMomentum1W", "label": "Min 1W return %", "default": 0, "step": 0.5},
             {"key": "maxMomentum1W", "label": "Max 1W return %", "default": 15, "step": 0.5},
+            {"key": "useMomentum15D", "label": "Check 15D return", "default": False, "type": "checkbox"},
+            {"key": "minMomentum15D", "label": "Min 15D return %", "default": 2, "step": 0.5},
+            {"key": "maxMomentum15D", "label": "Max 15D return %", "default": 25, "step": 0.5},
+            {"key": "useMomentum1M", "label": "Check 1M return", "default": True, "type": "checkbox"},
             {"key": "minMomentum1M", "label": "Min 1M return %", "default": 5, "step": 0.5},
             {"key": "maxMomentum1M", "label": "Max 1M return %", "default": 30, "step": 0.5},
+            {"key": "useMomentum3M", "label": "Check 3M return", "default": True, "type": "checkbox"},
             {"key": "minMomentum3M", "label": "Min 3M return %", "default": 10, "step": 0.5},
             {"key": "maxMomentum3M", "label": "Max 3M return %", "default": 60, "step": 0.5},
+            {"key": "useMomentum6M", "label": "Check 6M return", "default": True, "type": "checkbox"},
             {"key": "minMomentum6M", "label": "Min 6M return %", "default": 15, "step": 0.5},
             {"key": "maxMomentum6M", "label": "Max 6M return %", "default": 120, "step": 0.5},
+            {"key": "useMomentum1Y", "label": "Check 1Y return", "default": False, "type": "checkbox"},
+            {"key": "minMomentum1Y", "label": "Min 1Y return %", "default": 20, "step": 0.5},
+            {"key": "maxMomentum1Y", "label": "Max 1Y return %", "default": 250, "step": 0.5},
+            {"key": "useMomentum6MTo12M", "label": "Check 6M to 12M growth", "default": False, "type": "checkbox"},
+            {"key": "minMomentum6MTo12M", "label": "Min 6M to 12M growth %", "default": -20, "step": 0.5},
+            {"key": "maxMomentum6MTo12M", "label": "Max 6M to 12M growth %", "default": 80, "step": 0.5},
         ],
     },
     {
@@ -144,6 +188,24 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "rsi14_rising",
+        "name": "RSI 14 Rising",
+        "category": "Momentum",
+        "meaning": "Keep stocks where today's RSI is higher than the previous trading day's RSI, showing that buying momentum is improving.",
+        "fields": [
+            {"key": "minRsiRise", "label": "Min RSI increase", "default": 0, "step": 0.5},
+        ],
+    },
+    {
+        "id": "ema10_above_ema20",
+        "name": "EMA10 Above EMA20",
+        "category": "Trend",
+        "meaning": "Keep stocks where the shorter 10-day EMA is above the 20-day EMA, suggesting the short-term trend is stronger than the medium-term trend.",
+        "fields": [
+            {"key": "minEmaGapPct", "label": "Min EMA gap %", "default": 0, "step": 0.1},
+        ],
+    },
+    {
         "id": "macd_bullish_momentum",
         "name": "MACD Bullish Momentum",
         "category": "Momentum",
@@ -184,6 +246,26 @@ FILTER_LIBRARY = [
             {"key": "rsiMax", "label": "RSI max", "default": 68, "step": 1},
         ],
     },
+    {
+        "id": "mfi14_range",
+        "name": "Money Flow Index 14",
+        "category": "Money Flow",
+        "meaning": "Keep stocks whose 14-day Money Flow Index shows strong buying pressure by combining price movement with traded volume.",
+        "fields": [
+            {"key": "mfiMin", "label": "MFI min", "default": 50, "step": 1},
+            {"key": "mfiMax", "label": "MFI max", "default": 80, "step": 1},
+        ],
+    },
+    {
+        "id": "cci14_strong_trend",
+        "name": "CCI 14 Strong Trend",
+        "category": "Momentum",
+        "meaning": "Keep stocks whose 14-day Commodity Channel Index is high, meaning price is trading much stronger than its recent average range.",
+        "fields": [
+            {"key": "minCci14", "label": "Min CCI 14", "default": 110, "step": 5},
+            {"key": "maxCci14", "label": "Max CCI 14", "default": 999, "step": 5},
+        ],
+    },
 ]
 
 DEFAULT_RULE = {
@@ -221,6 +303,35 @@ CREATE TABLE IF NOT EXISTS stock_group_members (
 );
 """
 
+STRATEGY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS strategy_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS analysis_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_type TEXT NOT NULL,
+  stock_group_id TEXT NOT NULL,
+  trade_date TEXT,
+  from_date TEXT,
+  to_date TEXT,
+  config_json TEXT NOT NULL,
+  total_results INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS analysis_results (
+  run_id INTEGER NOT NULL,
+  exchange TEXT NOT NULL DEFAULT 'NSE',
+  symbol TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  PRIMARY KEY (run_id, exchange, symbol),
+  FOREIGN KEY (run_id) REFERENCES analysis_runs(id) ON DELETE CASCADE
+);
+"""
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -255,6 +366,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(save_custom_group(payload))
         if parsed.path == "/api/groups/combine":
             return self.send_json(combine_stock_groups(payload))
+        if parsed.path == "/api/strategy":
+            return self.send_json(save_strategy(payload))
         return self.send_json({"error": "Not found"}, 404)
 
     def read_payload(self):
@@ -280,6 +393,7 @@ def connect():
 def get_bootstrap():
     with connect() as conn:
         ensure_group_schema(conn)
+        ensure_strategy_schema(conn)
         delivery_window = conn.execute(
             """
             SELECT MIN(d.trade_date) AS first_date, MAX(d.trade_date) AS last_date
@@ -320,12 +434,14 @@ def get_bootstrap():
             )
         ]
         groups = load_groups(conn)
+        strategy = load_strategy(conn)
     return {
         "mode": "sqlite",
         "stats": dict(stats),
         "dates": list(reversed(dates)),
         "groups": groups,
         "filterLibrary": FILTER_LIBRARY,
+        "strategy": strategy,
         "defaultRule": DEFAULT_RULE,
         "defaultBacktest": {
             "fromDate": delivery_window["first_date"] or "2024-08-15",
@@ -341,6 +457,7 @@ def get_bootstrap():
 
 def get_rule_results(payload):
     rule = normalize_rule(payload.get("rule") or DEFAULT_RULE)
+    universe_filters = normalize_universe_filters(payload.get("universeFilters"))
     group = payload.get("group") or "all"
     trade_date = payload.get("date")
     search = str(payload.get("search") or "").strip().upper()
@@ -351,12 +468,13 @@ def get_rule_results(payload):
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
-            result = evaluate_stock_on_date(conn, stock, trade_date, rule)
+            result = evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters)
             if result["passed"]:
                 rows.append(result)
     rows.sort(key=lambda row: (row["volume"], row["symbol"]), reverse=True)
     return {
         "rule": rule,
+        "universeFilters": universe_filters,
         "date": trade_date,
         "group": group,
         "total": len(rows),
@@ -367,6 +485,7 @@ def get_rule_results(payload):
 
 def get_rule_group_results(payload):
     rules = normalize_rules(payload.get("rules") or [DEFAULT_RULE])
+    universe_filters = normalize_universe_filters(payload.get("universeFilters"))
     group = payload.get("group") or "all"
     trade_date = payload.get("date")
     search = str(payload.get("search") or "").strip().upper()
@@ -379,12 +498,13 @@ def get_rule_group_results(payload):
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
-            result = evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches)
+            result = evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches, universe_filters)
             if result["passed"]:
                 rows.append(result)
     rows.sort(key=lambda row: (row["matchCount"], row["volume"], row["symbol"]), reverse=True)
     return {
         "rules": rules,
+        "universeFilters": universe_filters,
         "date": trade_date,
         "group": group,
         "minMatches": min_matches,
@@ -396,6 +516,7 @@ def get_rule_group_results(payload):
 
 def backtest_rule(payload):
     rule = normalize_rule(payload.get("rule") or DEFAULT_RULE)
+    universe_filters = normalize_universe_filters(payload.get("universeFilters"))
     group = payload.get("group") or "all"
     from_date = payload.get("fromDate") or "2024-08-15"
     to_date = payload.get("toDate") or "2026-08-24"
@@ -420,6 +541,8 @@ def backtest_rule(payload):
                 if row["trade_date"] < from_date or row["trade_date"] > to_date:
                     continue
                 ctx = build_backtest_context(rows, indicators, index)
+                if not apply_universe_filters(ctx, universe_filters)[0]:
+                    continue
                 passed, reasons = apply_rule(ctx, rule)
                 if passed:
                     picks_by_date[row["trade_date"]].append({
@@ -431,8 +554,9 @@ def backtest_rule(payload):
                     })
 
     trades = simulate_trades(picks_by_date, rows_by_symbol, top_n, capital, target_pct, stop_pct, max_hold_days)
-    return {
+    response = {
         "rule": rule,
+        "universeFilters": universe_filters,
         "fromDate": from_date,
         "toDate": to_date,
         "totalSignals": sum(len(items) for items in picks_by_date.values()),
@@ -440,10 +564,23 @@ def backtest_rule(payload):
         "summary": summarize_trades(trades, capital),
         "tradesPreview": trades[:25],
     }
+    with connect() as conn:
+        response["analysisRunId"] = record_analysis_run(
+            conn,
+            "rule_backtest",
+            group,
+            None,
+            from_date,
+            to_date,
+            {**payload, "rule": rule, "universeFilters": universe_filters},
+            trades[:25],
+        )
+    return response
 
 
 def backtest_rule_group(payload):
     rules = normalize_rules(payload.get("rules") or [DEFAULT_RULE])
+    universe_filters = normalize_universe_filters(payload.get("universeFilters"))
     group = payload.get("group") or "all"
     from_date = payload.get("fromDate") or "2024-08-15"
     to_date = payload.get("toDate") or "2026-08-24"
@@ -470,6 +607,8 @@ def backtest_rule_group(payload):
                 if row["trade_date"] < from_date or row["trade_date"] > to_date:
                     continue
                 ctx = build_backtest_context(rows, indicators, index)
+                if not apply_universe_filters(ctx, universe_filters)[0]:
+                    continue
                 matched_rules = []
                 for rule in rules:
                     passed, reasons = apply_rule(ctx, rule)
@@ -486,8 +625,9 @@ def backtest_rule_group(payload):
                     })
 
     trades = simulate_trades(picks_by_date, rows_by_symbol, top_n, capital, target_pct, stop_pct, max_hold_days)
-    return {
+    response = {
         "rules": rules,
+        "universeFilters": universe_filters,
         "fromDate": from_date,
         "toDate": to_date,
         "minMatches": min_matches,
@@ -496,9 +636,21 @@ def backtest_rule_group(payload):
         "summary": summarize_trades(trades, capital),
         "tradesPreview": trades[:25],
     }
+    with connect() as conn:
+        response["analysisRunId"] = record_analysis_run(
+            conn,
+            "rule_group_backtest",
+            group,
+            None,
+            from_date,
+            to_date,
+            {**payload, "rules": rules, "universeFilters": universe_filters, "minMatches": min_matches},
+            trades[:25],
+        )
+    return response
 
 
-def evaluate_stock_on_date(conn, stock, trade_date, rule):
+def evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters=None):
     rows = conn.execute(
         """
         SELECT
@@ -520,7 +672,11 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
     if series[-1]["trade_date"] != trade_date:
         return {"passed": False}
     ctx = build_context(series, len(series) - 1)
+    universe_passed, universe_reasons = apply_universe_filters(ctx, universe_filters)
+    if not universe_passed:
+        return {"passed": False}
     passed, reasons = apply_rule(ctx, rule)
+    reasons = universe_reasons + reasons
     next_row = conn.execute(
         """
         SELECT trade_date, close
@@ -541,13 +697,19 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "deliveryPct": ctx["delivery_pct"],
         "avgDelivery20": ctx["avg_delivery_20"],
         "relativeDelivery": ctx["relative_delivery"],
+        "adv10": ctx["adv10"],
         "adv20": ctx["adv20"],
+        "relativeVolume10D": ctx["relative_volume_10d"],
         "relativeVolume": ctx["relative_volume"],
+        "priceChange1D": ctx["price_change_1d"],
         "momentum3D": ctx["momentum_3d"],
         "momentum1W": ctx["momentum_1w"],
+        "momentum15D": ctx["momentum_15d"],
         "momentum1M": ctx["momentum_1m"],
         "momentum3M": ctx["momentum_3m"],
         "momentum6M": ctx["momentum_6m"],
+        "momentum1Y": ctx["momentum_1y"],
+        "momentum6MTo12M": ctx["momentum_6m_to_12m"],
         "high52W": ctx["high_52w"],
         "low52W": ctx["low_52w"],
         "rangePosition52W": ctx["range_position_52w"],
@@ -557,6 +719,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "compression10D": ctx["compression_10d"],
         "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
         "ema9": ctx["ema9"],
+        "ema10": ctx["ema10"],
         "ema20": ctx["ema20"],
         "sma50": ctx["sma50"],
         "macdLine": ctx["macd_line"],
@@ -567,6 +730,9 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
         "atrPct": ctx["atr_pct"],
         "obv3D": ctx["obv_3d"],
         "rsi14": ctx["rsi14"],
+        "previousRsi14": ctx["previous_rsi14"],
+        "mfi14": ctx["mfi14"],
+        "cci14": ctx["cci14"],
         "nextDate": next_row["trade_date"] if next_row else None,
         "nextClose": next_row["close"] if next_row else None,
         "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
@@ -574,7 +740,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule):
     }
 
 
-def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
+def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches, universe_filters=None):
     rows = conn.execute(
         """
         SELECT
@@ -596,6 +762,9 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
     if series[-1]["trade_date"] != trade_date:
         return {"passed": False}
     ctx = build_context(series, len(series) - 1)
+    universe_passed, universe_reasons = apply_universe_filters(ctx, universe_filters)
+    if not universe_passed:
+        return {"passed": False}
     matched_rules = []
     failed_rules = []
     for rule in rules:
@@ -626,13 +795,19 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
         "deliveryPct": ctx["delivery_pct"],
         "avgDelivery20": ctx["avg_delivery_20"],
         "relativeDelivery": ctx["relative_delivery"],
+        "adv10": ctx["adv10"],
         "adv20": ctx["adv20"],
+        "relativeVolume10D": ctx["relative_volume_10d"],
         "relativeVolume": ctx["relative_volume"],
+        "priceChange1D": ctx["price_change_1d"],
         "momentum3D": ctx["momentum_3d"],
         "momentum1W": ctx["momentum_1w"],
+        "momentum15D": ctx["momentum_15d"],
         "momentum1M": ctx["momentum_1m"],
         "momentum3M": ctx["momentum_3m"],
         "momentum6M": ctx["momentum_6m"],
+        "momentum1Y": ctx["momentum_1y"],
+        "momentum6MTo12M": ctx["momentum_6m_to_12m"],
         "high52W": ctx["high_52w"],
         "low52W": ctx["low_52w"],
         "rangePosition52W": ctx["range_position_52w"],
@@ -642,6 +817,7 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
         "compression10D": ctx["compression_10d"],
         "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
         "ema9": ctx["ema9"],
+        "ema10": ctx["ema10"],
         "ema20": ctx["ema20"],
         "sma50": ctx["sma50"],
         "macdLine": ctx["macd_line"],
@@ -652,10 +828,13 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches):
         "atrPct": ctx["atr_pct"],
         "obv3D": ctx["obv_3d"],
         "rsi14": ctx["rsi14"],
+        "previousRsi14": ctx["previous_rsi14"],
+        "mfi14": ctx["mfi14"],
+        "cci14": ctx["cci14"],
         "nextDate": next_row["trade_date"] if next_row else None,
         "nextClose": next_row["close"] if next_row else None,
         "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
-        "reasons": matched_rules[0]["reasons"] if matched_rules else [],
+        "reasons": universe_reasons + (matched_rules[0]["reasons"] if matched_rules else []),
         "matchCount": len(matched_rules),
         "totalRules": len(rules),
         "minMatches": min_matches,
@@ -691,11 +870,21 @@ def evaluate_filter(ctx, selected):
         min_adv20 = float(values.get("minAdv20", 1_000_000))
         passed = ctx["adv20"] >= min_adv20
         return passed, f"20D ADV {ctx['adv20']:,.0f}; required >= {min_adv20:,.0f}."
+    if filter_id == "daily_volume_range":
+        min_volume = float(values.get("minDailyVolume", 20_000))
+        max_volume = float(values.get("maxDailyVolume", 999_999_999))
+        passed = min_volume <= ctx["volume"] <= max_volume
+        return passed, f"Daily volume {ctx['volume']:,.0f}; required {min_volume:,.0f}-{max_volume:,.0f}."
     if filter_id == "relative_volume":
         min_relative_volume = float(values.get("minRelativeVolume", 1.5))
         max_relative_volume = float(values.get("maxRelativeVolume", 999))
         passed = min_relative_volume <= ctx["relative_volume"] <= max_relative_volume
         return passed, f"Relative volume {ctx['relative_volume']:.2f}x; required {min_relative_volume:g}x-{max_relative_volume:g}x."
+    if filter_id == "relative_volume_10d":
+        min_relative_volume = float(values.get("minRelativeVolume10D", 2))
+        max_relative_volume = float(values.get("maxRelativeVolume10D", 999))
+        passed = min_relative_volume <= ctx["relative_volume_10d"] <= max_relative_volume
+        return passed, f"Volume is {ctx['relative_volume_10d']:.2f}x of 10D average; required {min_relative_volume:g}x-{max_relative_volume:g}x."
     if filter_id == "delivery_pct_range":
         min_delivery_pct = float(values.get("minDeliveryPct", 50))
         max_delivery_pct = float(values.get("maxDeliveryPct", 100))
@@ -715,15 +904,26 @@ def evaluate_filter(ctx, selected):
         max_momentum = float(values.get("maxMomentum3D", 12))
         passed = min_momentum <= ctx["momentum_3d"] <= max_momentum
         return passed, f"3D price change {ctx['momentum_3d']:+.2f}%; required {min_momentum:g}%-{max_momentum:g}%."
+    if filter_id == "price_change_1d":
+        min_change = float(values.get("minPriceChange1D", 1))
+        max_change = float(values.get("maxPriceChange1D", 999))
+        passed = min_change <= ctx["price_change_1d"] <= max_change
+        return passed, f"1D price change {ctx['price_change_1d']:+.2f}%; required {min_change:g}%-{max_change:g}%."
     if filter_id == "multi_period_momentum":
         ranges = [
-            ("1W", ctx["momentum_1w"], float(values.get("minMomentum1W", 0)), float(values.get("maxMomentum1W", 15))),
-            ("1M", ctx["momentum_1m"], float(values.get("minMomentum1M", 5)), float(values.get("maxMomentum1M", 30))),
-            ("3M", ctx["momentum_3m"], float(values.get("minMomentum3M", 10)), float(values.get("maxMomentum3M", 60))),
-            ("6M", ctx["momentum_6m"], float(values.get("minMomentum6M", 15)), float(values.get("maxMomentum6M", 120))),
+            ("1W", "useMomentum1W", ctx["momentum_1w"], float(values.get("minMomentum1W", 0)), float(values.get("maxMomentum1W", 15))),
+            ("15D", "useMomentum15D", ctx["momentum_15d"], float(values.get("minMomentum15D", 2)), float(values.get("maxMomentum15D", 25))),
+            ("1M", "useMomentum1M", ctx["momentum_1m"], float(values.get("minMomentum1M", 5)), float(values.get("maxMomentum1M", 30))),
+            ("3M", "useMomentum3M", ctx["momentum_3m"], float(values.get("minMomentum3M", 10)), float(values.get("maxMomentum3M", 60))),
+            ("6M", "useMomentum6M", ctx["momentum_6m"], float(values.get("minMomentum6M", 15)), float(values.get("maxMomentum6M", 120))),
+            ("1Y", "useMomentum1Y", ctx["momentum_1y"], float(values.get("minMomentum1Y", 20)), float(values.get("maxMomentum1Y", 250))),
+            ("6M-12M", "useMomentum6MTo12M", ctx["momentum_6m_to_12m"], float(values.get("minMomentum6MTo12M", -20)), float(values.get("maxMomentum6MTo12M", 80))),
         ]
-        passed = all(min_value <= value <= max_value for _, value, min_value, max_value in ranges)
-        summary = ", ".join(f"{label} {value:+.2f}% required {min_value:g}%-{max_value:g}%" for label, value, min_value, max_value in ranges)
+        active_ranges = [(label, value, min_value, max_value) for label, key, value, min_value, max_value in ranges if bool(values.get(key, False))]
+        if not active_ranges:
+            return False, "No momentum period is enabled."
+        passed = all(min_value <= value <= max_value for _, value, min_value, max_value in active_ranges)
+        summary = ", ".join(f"{label} {value:+.2f}% required {min_value:g}%-{max_value:g}%" for label, value, min_value, max_value in active_ranges)
         return passed, summary + "."
     if filter_id == "range_position_52w":
         min_range_position = float(values.get("minRangePosition52W", 70))
@@ -760,6 +960,16 @@ def evaluate_filter(ctx, selected):
         passed_count = sum(1 for item in checks if item)
         passed = passed_count >= min_checks
         return passed, f"EMA trend {passed_count}/3 checks passed; required >= {min_checks}."
+    if filter_id == "rsi14_rising":
+        min_rise = float(values.get("minRsiRise", 0))
+        rsi_rise = ctx["rsi14"] - ctx["previous_rsi14"]
+        passed = rsi_rise > min_rise
+        return passed, f"RSI 14 rose {rsi_rise:+.2f} points from {ctx['previous_rsi14']:.2f} to {ctx['rsi14']:.2f}; required > {min_rise:g}."
+    if filter_id == "ema10_above_ema20":
+        min_gap = float(values.get("minEmaGapPct", 0))
+        gap_pct = pct(ctx["ema10"], ctx["ema20"])
+        passed = ctx["ema10"] > ctx["ema20"] and gap_pct >= min_gap
+        return passed, f"EMA10 Rs. {ctx['ema10']:.2f}, EMA20 Rs. {ctx['ema20']:.2f}, gap {gap_pct:+.2f}%; required EMA10 > EMA20 and gap >= {min_gap:g}%."
     if filter_id == "macd_bullish_momentum":
         min_macd_line = float(values.get("minMacdLine", 0))
         min_histogram = float(values.get("minMacdHistogram", 0))
@@ -786,6 +996,16 @@ def evaluate_filter(ctx, selected):
         rsi_max = float(values.get("rsiMax", 68))
         passed = rsi_min <= ctx["rsi14"] <= rsi_max
         return passed, f"RSI 14 {ctx['rsi14']:.2f}; required {rsi_min:g}-{rsi_max:g}."
+    if filter_id == "mfi14_range":
+        mfi_min = float(values.get("mfiMin", 50))
+        mfi_max = float(values.get("mfiMax", 80))
+        passed = mfi_min <= ctx["mfi14"] <= mfi_max
+        return passed, f"MFI 14 {ctx['mfi14']:.2f}; required {mfi_min:g}-{mfi_max:g}."
+    if filter_id == "cci14_strong_trend":
+        min_cci = float(values.get("minCci14", 110))
+        max_cci = float(values.get("maxCci14", 999))
+        passed = min_cci <= ctx["cci14"] <= max_cci
+        return passed, f"CCI 14 {ctx['cci14']:.2f}; required {min_cci:g}-{max_cci:g}."
     return False, "Unknown filter."
 
 
@@ -797,6 +1017,7 @@ def build_context(rows, index):
     volumes = [row["volume"] for row in window]
     delivery_quantities = [row.get("deliverable_qty") for row in window]
     current = rows[index]
+    adv10 = avg(volumes[-11:-1])
     adv20 = avg(volumes[-21:-1])
     avg_delivery_20 = avg_available(delivery_quantities[-21:-1])
     high_20d = max(row["high"] for row in rows[max(0, index - 19):index + 1])
@@ -807,10 +1028,14 @@ def build_context(rows, index):
     low_52w = min(row["low"] for row in range_window)
     obv = obv_series(closes, volumes)
     ema9 = ema_series(closes, 9)[-1]
+    ema10 = ema_series(closes, 10)[-1]
     ema20 = ema_series(closes, 20)[-1]
     sma50 = avg(closes[-50:])
     macd = macd_series(closes)
     atr14 = atr_series(window, 14)[-1]
+    rsi_values = rsi_series(closes, 14)
+    mfi14 = mfi_series(window, 14)[-1]
+    cci14 = cci_series(window, 14)[-1]
     return {
         "date": current["trade_date"],
         "close": current["close"],
@@ -819,19 +1044,26 @@ def build_context(rows, index):
         "delivery_pct": current.get("delivery_pct"),
         "avg_delivery_20": avg_delivery_20,
         "relative_delivery": relative_to_avg(current.get("deliverable_qty"), avg_delivery_20),
+        "adv10": adv10,
         "adv20": adv20,
+        "relative_volume_10d": relative_to_avg(current["volume"], adv10),
         "relative_volume": relative_to_avg(current["volume"], adv20),
+        "price_change_1d": lookback_pct(rows, index, 1),
         "momentum_3d": pct(current["close"], rows[index - 3]["close"]) if index >= 3 else 0,
         "momentum_1w": lookback_pct(rows, index, 5),
+        "momentum_15d": lookback_pct(rows, index, 15),
         "momentum_1m": lookback_pct(rows, index, 21),
         "momentum_3m": lookback_pct(rows, index, 63),
         "momentum_6m": lookback_pct(rows, index, 126),
+        "momentum_1y": lookback_pct(rows, index, 252),
+        "momentum_6m_to_12m": period_pct(rows, index, 252, 126),
         "high_20d": high_20d,
         "distance_from_20d_high": pct(current["close"], high_20d),
         "close_position_day": range_position(current["close"], current["low"], current["high"]),
         "compression_10d": compression_10d,
         "rupee_liquidity_cr": (current["close"] * adv20) / 10_000_000,
         "ema9": ema9,
+        "ema10": ema10,
         "ema20": ema20,
         "sma50": sma50,
         "macd_line": macd["line"][-1],
@@ -844,7 +1076,10 @@ def build_context(rows, index):
         "low_52w": low_52w,
         "range_position_52w": range_position(current["close"], low_52w, high_52w),
         "obv_3d": relative_to_avg(obv[-1] - obv[-4], adv20) if len(obv) >= 4 else 0,
-        "rsi14": rsi(closes, 14),
+        "rsi14": rsi_values[-1],
+        "previous_rsi14": rsi_values[-2] if len(rsi_values) >= 2 else rsi_values[-1],
+        "mfi14": mfi14,
+        "cci14": cci14,
     }
 
 
@@ -856,12 +1091,20 @@ def build_indicators(rows):
     delivery_quantities = [row.get("deliverable_qty") for row in rows]
     obv = obv_series(closes, volumes)
     ema9 = ema_series(closes, 9)
+    ema10 = ema_series(closes, 10)
     ema20 = ema_series(closes, 20)
     macd = macd_series(closes)
     atr14 = atr_series(rows, 14)
+    rsi14 = rsi_series(closes, 14)
+    mfi14 = mfi_series(rows, 14)
+    cci14 = cci_series(rows, 14)
+    adv10 = [0] * len(rows)
     adv20 = [0] * len(rows)
+    for index in range(10, len(rows)):
+        adv10[index] = avg(volumes[index - 10:index])
     for index in range(20, len(rows)):
         adv20[index] = avg(volumes[index - 20:index])
+    relative_volume_10d = [0] * len(rows)
     relative_volume = [0] * len(rows)
     avg_delivery_20 = [0] * len(rows)
     relative_delivery = [0] * len(rows)
@@ -872,6 +1115,7 @@ def build_indicators(rows):
     atr_pct = [0] * len(rows)
     macd_histogram_change = [0] * len(rows)
     for index in range(len(rows)):
+        relative_volume_10d[index] = relative_to_avg(volumes[index], adv10[index])
         relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
         avg_delivery_20[index] = avg_available(delivery_quantities[index - 20:index]) if index >= 20 else 0
         relative_delivery[index] = relative_to_avg(delivery_quantities[index], avg_delivery_20[index])
@@ -882,16 +1126,21 @@ def build_indicators(rows):
         atr_pct[index] = pct(closes[index] + atr14[index], closes[index])
         macd_histogram_change[index] = macd["histogram"][index] - macd["histogram"][index - 1] if index else 0
     momentum_3d = [0] * len(rows)
+    price_change_1d = [0] * len(rows)
     momentum_1w = [0] * len(rows)
+    momentum_15d = [0] * len(rows)
     momentum_1m = [0] * len(rows)
     momentum_3m = [0] * len(rows)
     momentum_6m = [0] * len(rows)
+    momentum_1y = [0] * len(rows)
+    momentum_6m_to_12m = [0] * len(rows)
     high_52w = [0] * len(rows)
     low_52w = [0] * len(rows)
     range_position_52w = [50] * len(rows)
     high_20d = [0] * len(rows)
     distance_from_20d_high = [0] * len(rows)
     obv_3d = [0] * len(rows)
+    previous_rsi14 = [50] * len(rows)
     for index in range(len(rows)):
         high_20d[index] = max(highs[max(0, index - 19):index + 1])
         distance_from_20d_high[index] = pct(closes[index], high_20d[index])
@@ -903,26 +1152,38 @@ def build_indicators(rows):
         momentum_3d[index] = pct(closes[index], closes[index - 3])
         obv_3d[index] = relative_to_avg(obv[index] - obv[index - 3], adv20[index])
     for index in range(len(rows)):
+        price_change_1d[index] = pct(closes[index], closes[index - 1]) if index >= 1 else 0
         momentum_1w[index] = pct(closes[index], closes[index - 5]) if index >= 5 else 0
+        momentum_15d[index] = pct(closes[index], closes[index - 15]) if index >= 15 else 0
         momentum_1m[index] = pct(closes[index], closes[index - 21]) if index >= 21 else 0
         momentum_3m[index] = pct(closes[index], closes[index - 63]) if index >= 63 else 0
         momentum_6m[index] = pct(closes[index], closes[index - 126]) if index >= 126 else 0
+        momentum_1y[index] = pct(closes[index], closes[index - 252]) if index >= 252 else 0
+        momentum_6m_to_12m[index] = pct(closes[index - 126], closes[index - 252]) if index >= 252 else 0
+        previous_rsi14[index] = rsi14[index - 1] if index else rsi14[index]
     return {
+        "adv10": adv10,
         "adv20": adv20,
+        "relative_volume_10d": relative_volume_10d,
         "relative_volume": relative_volume,
         "avg_delivery_20": avg_delivery_20,
         "relative_delivery": relative_delivery,
+        "price_change_1d": price_change_1d,
         "momentum_3d": momentum_3d,
         "momentum_1w": momentum_1w,
+        "momentum_15d": momentum_15d,
         "momentum_1m": momentum_1m,
         "momentum_3m": momentum_3m,
         "momentum_6m": momentum_6m,
+        "momentum_1y": momentum_1y,
+        "momentum_6m_to_12m": momentum_6m_to_12m,
         "high_20d": high_20d,
         "distance_from_20d_high": distance_from_20d_high,
         "close_position_day": close_position_day,
         "compression_10d": compression_10d,
         "rupee_liquidity_cr": rupee_liquidity_cr,
         "ema9": ema9,
+        "ema10": ema10,
         "ema20": ema20,
         "sma50": sma50,
         "macd_line": macd["line"],
@@ -935,7 +1196,10 @@ def build_indicators(rows):
         "low_52w": low_52w,
         "range_position_52w": range_position_52w,
         "obv_3d": obv_3d,
-        "rsi14": rsi_series(closes, 14),
+        "rsi14": rsi14,
+        "previous_rsi14": previous_rsi14,
+        "mfi14": mfi14,
+        "cci14": cci14,
     }
 
 
@@ -949,19 +1213,26 @@ def build_backtest_context(rows, indicators, index):
         "delivery_pct": current.get("delivery_pct"),
         "avg_delivery_20": indicators["avg_delivery_20"][index],
         "relative_delivery": indicators["relative_delivery"][index],
+        "adv10": indicators["adv10"][index],
         "adv20": indicators["adv20"][index],
+        "relative_volume_10d": indicators["relative_volume_10d"][index],
         "relative_volume": indicators["relative_volume"][index],
+        "price_change_1d": indicators["price_change_1d"][index],
         "momentum_3d": indicators["momentum_3d"][index],
         "momentum_1w": indicators["momentum_1w"][index],
+        "momentum_15d": indicators["momentum_15d"][index],
         "momentum_1m": indicators["momentum_1m"][index],
         "momentum_3m": indicators["momentum_3m"][index],
         "momentum_6m": indicators["momentum_6m"][index],
+        "momentum_1y": indicators["momentum_1y"][index],
+        "momentum_6m_to_12m": indicators["momentum_6m_to_12m"][index],
         "high_20d": indicators["high_20d"][index],
         "distance_from_20d_high": indicators["distance_from_20d_high"][index],
         "close_position_day": indicators["close_position_day"][index],
         "compression_10d": indicators["compression_10d"][index],
         "rupee_liquidity_cr": indicators["rupee_liquidity_cr"][index],
         "ema9": indicators["ema9"][index],
+        "ema10": indicators["ema10"][index],
         "ema20": indicators["ema20"][index],
         "sma50": indicators["sma50"][index],
         "macd_line": indicators["macd_line"][index],
@@ -975,6 +1246,9 @@ def build_backtest_context(rows, indicators, index):
         "range_position_52w": indicators["range_position_52w"][index],
         "obv_3d": indicators["obv_3d"][index],
         "rsi14": indicators["rsi14"][index],
+        "previous_rsi14": indicators["previous_rsi14"][index],
+        "mfi14": indicators["mfi14"][index],
+        "cci14": indicators["cci14"][index],
     }
 
 
@@ -1061,6 +1335,35 @@ def normalize_rule(rule):
 def normalize_rules(rules):
     normalized = [normalize_rule(rule) for rule in rules if isinstance(rule, dict)]
     return [rule for rule in normalized if rule["filters"]]
+
+
+def normalize_universe_filters(raw_filters):
+    filters = []
+    for item in raw_filters or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("id") != "price_range":
+            continue
+        definition = filter_definition("price_range")
+        defaults = {field["key"]: field["default"] for field in definition["fields"]}
+        defaults.update(item.get("values") or {})
+        filters.append({"id": "price_range", "values": defaults})
+    return filters
+
+
+def apply_universe_filters(ctx, filters):
+    reasons = []
+    for selected in filters or []:
+        definition = filter_definition(selected["id"])
+        passed, reason = evaluate_filter(ctx, selected)
+        reasons.append({
+            "filter": definition["name"] if definition else selected["id"],
+            "passed": passed,
+            "reason": reason,
+        })
+        if not passed:
+            return False, reasons
+    return True, reasons
 
 
 def filter_definition(filter_id):
@@ -1234,6 +1537,69 @@ def ensure_group_schema(conn):
     conn.executescript(GROUP_SCHEMA)
 
 
+def ensure_strategy_schema(conn):
+    conn.executescript(STRATEGY_SCHEMA)
+
+
+def load_strategy(conn):
+    ensure_strategy_schema(conn)
+    row = conn.execute("SELECT value FROM strategy_state WHERE key = 'main'").fetchone()
+    if not row:
+        return None
+    try:
+        strategy = json.loads(row["value"])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(strategy, dict):
+        return None
+    return strategy
+
+
+def save_strategy(payload):
+    strategy = {
+        "rules": payload.get("rules") if isinstance(payload.get("rules"), list) else [],
+        "ruleGroups": payload.get("ruleGroups") if isinstance(payload.get("ruleGroups"), list) else [],
+        "settings": payload.get("settings") if isinstance(payload.get("settings"), dict) else {},
+    }
+    with connect() as conn:
+        ensure_strategy_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO strategy_state (key, value, updated_at)
+            VALUES ('main', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            """,
+            (json.dumps(strategy),),
+        )
+        conn.commit()
+    return {"ok": True, "strategy": strategy}
+
+
+def record_analysis_run(conn, run_type, group, trade_date, from_date, to_date, config, results):
+    ensure_strategy_schema(conn)
+    cursor = conn.execute(
+        """
+        INSERT INTO analysis_runs (run_type, stock_group_id, trade_date, from_date, to_date, config_json, total_results)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_type, group, trade_date, from_date, to_date, json.dumps(config), len(results)),
+    )
+    run_id = cursor.lastrowid
+    for result in results:
+        symbol = result.get("symbol")
+        if not symbol:
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO analysis_results (run_id, exchange, symbol, result_json)
+            VALUES (?, 'NSE', ?, ?)
+            """,
+            (run_id, symbol, json.dumps(result)),
+        )
+    conn.commit()
+    return run_id
+
+
 def parse_symbols(raw):
     cleaned = raw.replace(",", " ").replace("\n", " ").replace("\t", " ")
     symbols = []
@@ -1282,6 +1648,12 @@ def lookback_pct(rows, index, sessions):
     return pct(rows[index]["close"], rows[index - sessions]["close"]) if index >= sessions else 0
 
 
+def period_pct(rows, index, start_sessions_back, end_sessions_back):
+    if index < start_sessions_back:
+        return 0
+    return pct(rows[index - end_sessions_back]["close"], rows[index - start_sessions_back]["close"])
+
+
 def ema_series(values, period):
     if not values:
         return []
@@ -1315,6 +1687,43 @@ def atr_series(rows, period=14):
         )
         true_ranges.append(true_range)
         out.append(avg(true_ranges[max(0, index - period + 1):index + 1]))
+    return out
+
+
+def cci_series(rows, period=14):
+    typical_prices = [(row["high"] + row["low"] + row["close"]) / 3 for row in rows]
+    out = [0] * len(rows)
+    for index in range(len(rows)):
+        window = typical_prices[max(0, index - period + 1):index + 1]
+        typical_avg = avg(window)
+        mean_deviation = avg([abs(value - typical_avg) for value in window])
+        out[index] = ((typical_prices[index] - typical_avg) / (0.015 * mean_deviation)) if mean_deviation else 0
+    return out
+
+
+def mfi_series(rows, period=14):
+    typical_prices = [(row["high"] + row["low"] + row["close"]) / 3 for row in rows]
+    raw_money_flows = [typical_prices[index] * rows[index]["volume"] for index in range(len(rows))]
+    positive_flows = [0] * len(rows)
+    negative_flows = [0] * len(rows)
+    for index in range(1, len(rows)):
+        if typical_prices[index] > typical_prices[index - 1]:
+            positive_flows[index] = raw_money_flows[index]
+        elif typical_prices[index] < typical_prices[index - 1]:
+            negative_flows[index] = raw_money_flows[index]
+
+    out = [50] * len(rows)
+    for index in range(len(rows)):
+        start = max(0, index - period + 1)
+        positive_sum = sum(positive_flows[start:index + 1])
+        negative_sum = sum(negative_flows[start:index + 1])
+        if negative_sum == 0 and positive_sum == 0:
+            out[index] = 50
+        elif negative_sum == 0:
+            out[index] = 100
+        else:
+            money_ratio = positive_sum / negative_sum
+            out[index] = 100 - (100 / (1 + money_ratio))
     return out
 
 
@@ -1372,8 +1781,9 @@ def obv_series(closes, volumes):
 
 
 if __name__ == "__main__":
+    host = os.environ.get("SIGNALDESK_HOST", "127.0.0.1")
     port = 8000
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"SignalDesk Rule Builder running at http://127.0.0.1:{port}")
+    server = ThreadingHTTPServer((host, port), Handler)
+    print(f"SignalDesk Rule Builder running at http://{host}:{port}")
     print(f"SQLite DB: {DB_PATH}")
     server.serve_forever()

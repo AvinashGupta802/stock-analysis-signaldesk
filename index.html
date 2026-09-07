@@ -35,9 +35,18 @@
           <label id="analysisGroupLabel" for="analysisRuleGroupSelect">Recommendation group</label>
           <select id="analysisRuleGroupSelect"></select>
           <label class="inline-toggle">
-            <input id="ignorePriceFilterInput" type="checkbox" />
-            <span>Ignore Price Filter</span>
+            <input id="applyPriceFilterInput" type="checkbox" />
+            <span>Apply Price Filter</span>
           </label>
+          <div class="input-grid two-col">
+            <label>Min price
+              <input id="minUniversePriceInput" type="number" min="0" step="1" value="100" />
+            </label>
+            <label>Max price
+              <input id="maxUniversePriceInput" type="number" min="0" step="1" value="1000" />
+            </label>
+          </div>
+          <p class="helper-text">Stock group is filtered first. Price filter is applied only when this checkbox is on.</p>
         </section>
 
         <section class="panel compact" data-view-section="rules">
@@ -167,6 +176,7 @@
                     <th>Delivery %</th>
                     <th>Del/20D</th>
                     <th>3D %</th>
+                    <th>15D %</th>
                     <th>Day Pos</th>
                     <th>10D Comp</th>
                     <th>20D High</th>
@@ -174,6 +184,7 @@
                     <th>OBV/20D</th>
                     <th>20D ADV</th>
                     <th>Rupee Liq</th>
+                    <th>1Y %</th>
                     <th>RSI</th>
                     <th>ATR %</th>
                     <th>Next day</th>
@@ -196,6 +207,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-19"></script>
+    <script src="./app.js?v=builder-26"></script>
   </body>
 </html>
