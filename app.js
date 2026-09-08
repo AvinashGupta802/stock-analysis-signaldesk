@@ -1233,6 +1233,7 @@ function starterRules(defaultRule) {
     {
       id: "rule_deep_compression_ema_launch",
       name: "Deep: Compression EMA Launch",
+      description: "Catches stocks that break upward after a tight 10-day range while short-term EMA trend is aligned. Best used as an aggressive all-NSE momentum setup.",
       filters: [
         { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
@@ -1253,6 +1254,7 @@ function starterRules(defaultRule) {
     {
       id: "rule_deep_mfi_cci_long_momentum",
       name: "Deep: MFI CCI Long Momentum",
+      description: "Looks for stocks already in a longer uptrend where money flow is healthy and CCI shows strong price thrust.",
       filters: [
         { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "multi_period_momentum", values: momentumValues({ useMomentum15D: true, useMomentum1Y: true }) },
@@ -1263,6 +1265,7 @@ function starterRules(defaultRule) {
     {
       id: "rule_screenshot_momentum_proxy",
       name: "Screenshot: Momentum Stocks Proxy",
+      description: "Replicates the uploaded momentum screener style using price jump, high RSI, rising RSI, minimum volume, EMA10 above EMA20, and high CCI.",
       filters: [
         { id: "price_range", values: { minPrice: 100, maxPrice: 999999 } },
         { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
@@ -1311,6 +1314,26 @@ function starterRules(defaultRule) {
         { id: "relative_delivery_qty", values: { minRelativeDelivery: 1.5, maxRelativeDelivery: 999 } },
         { id: "multi_period_momentum", values: momentumValues({ useMomentum3M: true, useMomentum6M: true }) },
         { id: "delivery_pct_range", values: { minDeliveryPct: 70, maxDeliveryPct: 100 } },
+      ],
+    },
+    {
+      id: "rule_pause_breakout_confirmation",
+      name: "Pause Breakout Confirmation",
+      description: "Finds stocks with a large volume burst while price is still near its 20-day high and the last 3 days were flat. This tries to catch a breakout after a short pause.",
+      filters: [
+        { id: "relative_volume", values: { minRelativeVolume: 3, maxRelativeVolume: 999 } },
+        { id: "close_near_20d_high", values: { maxDistanceFrom20DHigh: 2 } },
+        { id: "price_momentum_3d", values: { minMomentum3D: -3, maxMomentum3D: 3 } },
+      ],
+    },
+    {
+      id: "rule_obv_macd_volume_accumulation",
+      name: "OBV MACD Volume Accumulation",
+      description: "Looks for accumulation: OBV rising during quiet 3-day price action, MACD bullish, and volume at least 3x the 10-day average.",
+      filters: [
+        { id: "obv_accumulation_3d", values: { minObv3D: 1, maxAbsMomentum3D: 2 } },
+        { id: "macd_bullish_momentum", values: { minMacdLine: 0, minMacdHistogram: 0, minMacdHistogramChange: 0 } },
+        { id: "relative_volume_10d", values: { minRelativeVolume10D: 3, maxRelativeVolume10D: 999 } },
       ],
     },
   ];
@@ -1393,16 +1416,16 @@ function starterRuleGroups() {
     group("group_deep_compression_breakout", "Deep: Compression Breakout Group", 1, [
       "rule_deep_compression_ema_launch",
       "rule_deep_10d_volume_near_high",
-    ]),
+    ], "Research candidate. It looks for stocks leaving a tight range with trend confirmation; strongest on broad/all NSE testing."),
     group("group_deep_mfi_momentum", "Deep: MFI Momentum Group", 1, [
       "rule_deep_mfi_cci_long_momentum",
       "rule_discovered_long_momentum_cci_delivery",
-    ]),
+    ], "Research candidate. It combines longer positive momentum with money-flow and CCI strength."),
     group("group_deep_high_conviction_research", "Deep: High Conviction Research", 2, [
       "rule_deep_compression_ema_launch",
       "rule_deep_10d_volume_near_high",
       "rule_deep_mfi_cci_long_momentum",
-    ]),
+    ], "Consensus group. A stock needs at least two deeper momentum/reversal-breakout rules to agree."),
     group("group_screenshot_momentum_proxy", "Screenshot: Momentum Stocks Proxy", 1, [
       "rule_screenshot_momentum_proxy",
     ], "Proxy for the uploaded momentum-screen style: price jump, RSI strength, rising RSI, daily volume, EMA10 above EMA20, and high CCI."),
@@ -1418,6 +1441,12 @@ function starterRuleGroups() {
     group("group_delivery_momentum_confirmation", "Delivery Momentum Confirmation", 1, [
       "rule_delivery_momentum_confirmation",
     ], "Research candidate. It scans the selected stock group for long momentum confirmed by high delivery activity; backtested strongest on liquid stocks."),
+    group("group_pause_breakout_confirmation", "Pause Breakout Confirmation", 1, [
+      "rule_pause_breakout_confirmation",
+    ], "Research candidate. It scans the selected stock group for a volume burst near the 20-day high after a short 3-day pause; strongest on liquid stocks."),
+    group("group_obv_macd_volume_accumulation", "OBV MACD Volume Accumulation", 1, [
+      "rule_obv_macd_volume_accumulation",
+    ], "Research candidate. It scans the selected stock group for OBV accumulation confirmed by bullish MACD and strong 10-day relative volume; strongest on liquid stocks."),
   ].filter((group) => group.ruleIds.length);
 }
 
