@@ -310,6 +310,45 @@ CREATE TABLE IF NOT EXISTS strategy_state (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS strategy_rules (
+  rule_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  kind TEXT NOT NULL DEFAULT 'system',
+  status TEXT NOT NULL DEFAULT 'active',
+  version INTEGER NOT NULL DEFAULT 1,
+  filters_json TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS strategy_rule_groups (
+  group_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  kind TEXT NOT NULL DEFAULT 'system',
+  status TEXT NOT NULL DEFAULT 'active',
+  min_matches INTEGER NOT NULL DEFAULT 1,
+  rule_ids_json TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS rule_daily_results (
+  trade_date TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  rule_version INTEGER NOT NULL,
+  exchange TEXT NOT NULL DEFAULT 'NSE',
+  symbol TEXT NOT NULL,
+  passed INTEGER NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (trade_date, rule_id, rule_version, exchange, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_daily_results_date_rule ON rule_daily_results(trade_date, rule_id, rule_version);
+CREATE INDEX IF NOT EXISTS idx_rule_daily_results_symbol ON rule_daily_results(exchange, symbol, trade_date);
+
 CREATE TABLE IF NOT EXISTS analysis_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_type TEXT NOT NULL,
@@ -368,6 +407,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(combine_stock_groups(payload))
         if parsed.path == "/api/strategy":
             return self.send_json(save_strategy(payload))
+        if parsed.path == "/api/eod-analysis":
+            try:
+                return self.send_json(run_eod_analysis(payload))
+            except Exception as exc:
+                return self.send_json({"error": str(exc)}, 500)
         return self.send_json({"error": "Not found"}, 404)
 
     def read_payload(self):
@@ -1539,20 +1583,79 @@ def ensure_group_schema(conn):
 
 def ensure_strategy_schema(conn):
     conn.executescript(STRATEGY_SCHEMA)
+    migrate_legacy_strategy(conn)
 
 
 def load_strategy(conn):
     ensure_strategy_schema(conn)
+    rules = []
+    for row in conn.execute(
+        """
+        SELECT rule_id, name, description, kind, status, version, filters_json
+        FROM strategy_rules
+        WHERE status = 'active'
+        ORDER BY kind DESC, name
+        """
+    ):
+        try:
+            filters = json.loads(row["filters_json"])
+        except json.JSONDecodeError:
+            filters = []
+        rules.append(
+            {
+                "id": row["rule_id"],
+                "name": row["name"],
+                "description": row["description"] or "",
+                "kind": row["kind"],
+                "version": row["version"],
+                "filters": filters if isinstance(filters, list) else [],
+            }
+        )
+    groups = []
+    for row in conn.execute(
+        """
+        SELECT group_id, name, description, kind, status, min_matches, rule_ids_json
+        FROM strategy_rule_groups
+        WHERE status = 'active'
+        ORDER BY kind DESC, name
+        """
+    ):
+        try:
+            rule_ids = json.loads(row["rule_ids_json"])
+        except json.JSONDecodeError:
+            rule_ids = []
+        groups.append(
+            {
+                "id": row["group_id"],
+                "name": row["name"],
+                "description": row["description"] or "",
+                "kind": row["kind"],
+                "minMatches": row["min_matches"],
+                "ruleIds": rule_ids if isinstance(rule_ids, list) else [],
+            }
+        )
+    settings = load_strategy_settings(conn)
+    return {"rules": rules, "ruleGroups": groups, "settings": settings, "source": "db"}
+
+
+def load_strategy_settings(conn):
+    row = conn.execute("SELECT value FROM strategy_state WHERE key = 'settings'").fetchone()
+    if row:
+        try:
+            settings = json.loads(row["value"])
+            return settings if isinstance(settings, dict) else {}
+        except json.JSONDecodeError:
+            return {}
     row = conn.execute("SELECT value FROM strategy_state WHERE key = 'main'").fetchone()
     if not row:
-        return None
+        return {}
     try:
         strategy = json.loads(row["value"])
     except json.JSONDecodeError:
-        return None
-    if not isinstance(strategy, dict):
-        return None
-    return strategy
+        return {}
+    if isinstance(strategy, dict) and isinstance(strategy.get("settings"), dict):
+        return strategy["settings"]
+    return {}
 
 
 def save_strategy(payload):
@@ -1563,16 +1666,118 @@ def save_strategy(payload):
     }
     with connect() as conn:
         ensure_strategy_schema(conn)
+        save_strategy_tables(conn, strategy)
+        conn.commit()
+        saved = load_strategy(conn)
+    return {"ok": True, "strategy": saved}
+
+
+def migrate_legacy_strategy(conn):
+    count = conn.execute("SELECT COUNT(*) FROM strategy_rules").fetchone()[0]
+    if count:
+        return
+    row = conn.execute("SELECT value FROM strategy_state WHERE key = 'main'").fetchone()
+    if not row:
+        return
+    try:
+        strategy = json.loads(row["value"])
+    except json.JSONDecodeError:
+        return
+    if not isinstance(strategy, dict):
+        return
+    save_strategy_tables(conn, strategy, default_kind="system")
+
+
+def save_strategy_tables(conn, strategy, default_kind="user"):
+    existing_rules = {
+        row["rule_id"]: row
+        for row in conn.execute("SELECT rule_id, kind, version, filters_json FROM strategy_rules")
+    }
+    for raw_rule in strategy.get("rules") or []:
+        rule = normalize_rule(raw_rule)
+        rule_id = raw_rule.get("id") or slugify(rule["name"])
+        filters_json = json.dumps(signal_filters(rule), sort_keys=True)
+        existing = existing_rules.get(rule_id)
+        kind = raw_rule.get("kind") or (existing["kind"] if existing else default_kind)
+        version = int(existing["version"]) if existing else int(raw_rule.get("version") or 1)
+        if existing and existing["filters_json"] != filters_json:
+            version += 1
         conn.execute(
             """
-            INSERT INTO strategy_state (key, value, updated_at)
-            VALUES ('main', ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            INSERT INTO strategy_rules (
+              rule_id, name, description, kind, status, version, filters_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(rule_id) DO UPDATE SET
+              name = excluded.name,
+              description = excluded.description,
+              kind = excluded.kind,
+              status = 'active',
+              version = excluded.version,
+              filters_json = excluded.filters_json,
+              updated_at = CURRENT_TIMESTAMP
             """,
-            (json.dumps(strategy),),
+            (
+                rule_id,
+                rule["name"],
+                raw_rule.get("description") or "",
+                kind,
+                version,
+                filters_json,
+            ),
         )
-        conn.commit()
-    return {"ok": True, "strategy": strategy}
+    existing_groups = {
+        row["group_id"]: row
+        for row in conn.execute("SELECT group_id, kind FROM strategy_rule_groups")
+    }
+    known_rule_ids = {
+        row["rule_id"]
+        for row in conn.execute("SELECT rule_id FROM strategy_rules WHERE status = 'active'")
+    }
+    for raw_group in strategy.get("ruleGroups") or []:
+        group_id = raw_group.get("id") or slugify(raw_group.get("name") or "rule_group")
+        rule_ids = [rule_id for rule_id in raw_group.get("ruleIds") or [] if rule_id in known_rule_ids]
+        if not rule_ids:
+            continue
+        min_matches = max(1, min(int(raw_group.get("minMatches") or 1), len(rule_ids)))
+        existing = existing_groups.get(group_id)
+        kind = raw_group.get("kind") or (existing["kind"] if existing else default_kind)
+        conn.execute(
+            """
+            INSERT INTO strategy_rule_groups (
+              group_id, name, description, kind, status, min_matches, rule_ids_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(group_id) DO UPDATE SET
+              name = excluded.name,
+              description = excluded.description,
+              kind = excluded.kind,
+              status = 'active',
+              min_matches = excluded.min_matches,
+              rule_ids_json = excluded.rule_ids_json,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                group_id,
+                raw_group.get("name") or "Untitled Rule Group",
+                raw_group.get("description") or "",
+                kind,
+                min_matches,
+                json.dumps(rule_ids),
+            ),
+        )
+    conn.execute(
+        """
+        INSERT INTO strategy_state (key, value, updated_at)
+        VALUES ('settings', ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        """,
+        (json.dumps(strategy.get("settings") or {}),),
+    )
+
+
+def signal_filters(rule):
+    return [item for item in rule.get("filters") or [] if item.get("id") != "price_range"]
 
 
 def record_analysis_run(conn, run_type, group, trade_date, from_date, to_date, config, results):
@@ -1598,6 +1803,116 @@ def record_analysis_run(conn, run_type, group, trade_date, from_date, to_date, c
         )
     conn.commit()
     return run_id
+
+
+def run_eod_analysis(payload):
+    trade_date = payload.get("date") or latest_trade_date()
+    if not trade_date:
+        return {"error": "No trade date available"}
+    with connect() as conn:
+        ensure_strategy_schema(conn)
+        strategy = load_strategy(conn)
+        rules = [rule for rule in strategy.get("rules", []) if rule.get("filters")]
+        count = store_rule_daily_results(conn, trade_date, rules)
+        conn.commit()
+    return {"ok": True, "date": trade_date, "rules": len(rules), "storedResults": count}
+
+
+def latest_trade_date():
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(p.trade_date) AS trade_date
+            FROM daily_prices p
+            JOIN instruments i ON i.id = p.instrument_id
+            WHERE i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%'
+            """
+        ).fetchone()
+        return row["trade_date"] if row else None
+
+
+def store_rule_daily_results(conn, trade_date, rules):
+    stocks = load_group_stocks(conn, "all")
+    stored = 0
+    for stock in stocks:
+        rows = load_rows(conn, stock["id"])
+        index = next((idx for idx, row in enumerate(rows) if row["trade_date"] == trade_date), None)
+        if index is None or index < 21:
+            for rule in rules:
+                result = {
+                    "passed": False,
+                    "symbol": stock["symbol"],
+                    "name": stock["name"],
+                    "date": trade_date,
+                    "reason": "No usable price history for this date.",
+                }
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO rule_daily_results (
+                      trade_date, rule_id, rule_version, exchange, symbol, passed, result_json, created_at
+                    )
+                    VALUES (?, ?, ?, 'NSE', ?, 0, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (trade_date, rule["id"], int(rule.get("version") or 1), stock["symbol"], json.dumps(result)),
+                )
+                stored += 1
+            continue
+        ctx = build_context(rows, index)
+        next_row = rows[index + 1] if index + 1 < len(rows) else None
+        for rule in rules:
+            passed, reasons = apply_rule(ctx, rule)
+            result = {
+                "passed": passed,
+                "symbol": stock["symbol"],
+                "name": stock["name"],
+                "date": trade_date,
+                "ruleId": rule["id"],
+                "ruleVersion": int(rule.get("version") or 1),
+                "ruleName": rule["name"],
+                "close": ctx["close"],
+                "volume": ctx["volume"],
+                "deliverableQty": ctx["deliverable_qty"],
+                "deliveryPct": ctx["delivery_pct"],
+                "relativeDelivery": ctx["relative_delivery"],
+                "relativeVolume10D": ctx["relative_volume_10d"],
+                "relativeVolume": ctx["relative_volume"],
+                "priceChange1D": ctx["price_change_1d"],
+                "momentum3D": ctx["momentum_3d"],
+                "rangePosition52W": ctx["range_position_52w"],
+                "distanceFrom20DHigh": ctx["distance_from_20d_high"],
+                "closePositionDay": ctx["close_position_day"],
+                "compression10D": ctx["compression_10d"],
+                "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
+                "rsi14": ctx["rsi14"],
+                "mfi14": ctx["mfi14"],
+                "cci14": ctx["cci14"],
+                "atrPct": ctx["atr_pct"],
+                "macdLine": ctx["macd_line"],
+                "macdSignal": ctx["macd_signal"],
+                "macdHistogram": ctx["macd_histogram"],
+                "nextDate": next_row["trade_date"] if next_row else None,
+                "nextClose": next_row["close"] if next_row else None,
+                "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
+                "reasons": reasons,
+            }
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO rule_daily_results (
+                  trade_date, rule_id, rule_version, exchange, symbol, passed, result_json, created_at
+                )
+                VALUES (?, ?, ?, 'NSE', ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    trade_date,
+                    rule["id"],
+                    int(rule.get("version") or 1),
+                    stock["symbol"],
+                    1 if result.get("passed") else 0,
+                    json.dumps(result),
+                ),
+            )
+            stored += 1
+    return stored
 
 
 def parse_symbols(raw):

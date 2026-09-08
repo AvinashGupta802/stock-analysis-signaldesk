@@ -945,7 +945,7 @@ function loadSavedRules(defaultRule, serverRules) {
       ids.add(rule.id);
       names.add(rule.name);
     });
-    return [...savedRules, ...localMerged, ...starters.filter((rule) => !ids.has(rule.id) && !names.has(rule.name))];
+    return [...savedRules, ...localMerged];
   }
   try {
     const saved = localRules;
@@ -990,7 +990,7 @@ function loadSavedRuleGroups(serverGroups) {
         ids.add(group.id);
         names.add(group.name);
       });
-      return [...cleaned, ...localMerged, ...templates.filter((group) => !ids.has(group.id) && !names.has(group.name) && group.ruleIds.length)];
+      return [...cleaned, ...localMerged];
     }
   }
   try {
@@ -1099,7 +1099,6 @@ function starterRules(defaultRule) {
       id: "rule_volume_delivery_core",
       name: "Volume Delivery Core",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
         { id: "relative_volume", values: { minRelativeVolume: 1.5, maxRelativeVolume: 999 } },
         { id: "delivery_pct_range", values: { minDeliveryPct: 60, maxDeliveryPct: 100 } },
       ],
@@ -1108,7 +1107,6 @@ function starterRules(defaultRule) {
       id: "rule_breakout_trend_quality",
       name: "Breakout Trend Quality",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
         { id: "close_near_20d_high", values: { maxDistanceFrom20DHigh: 2 } },
         { id: "ema_trend", values: { minEmaTrendChecks: 3 } },
         { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
@@ -1118,7 +1116,6 @@ function starterRules(defaultRule) {
       id: "rule_delivery_accumulation",
       name: "Delivery Accumulation",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
         { id: "delivery_pct_range", values: { minDeliveryPct: 60, maxDeliveryPct: 100 } },
         { id: "relative_delivery_qty", values: { minRelativeDelivery: 1.5, maxRelativeDelivery: 999 } },
       ],
@@ -1127,7 +1124,6 @@ function starterRules(defaultRule) {
       id: "rule_obv_consolidation",
       name: "OBV Consolidation Breakout",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
         { id: "range_compression_10d", values: { minCompression10D: 0, maxCompression10D: 12 } },
         { id: "obv_accumulation_3d", values: { minObv3D: 0.5, maxAbsMomentum3D: 2 } },
         { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
@@ -1137,7 +1133,6 @@ function starterRules(defaultRule) {
       id: "rule_momentum_controlled",
       name: "Momentum Controlled",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
         { id: "price_momentum_3d", values: { minMomentum3D: 2, maxMomentum3D: 8 } },
         { id: "rsi14_range", values: { rsiMin: 50, rsiMax: 68 } },
         { id: "atr_risk", values: { minAtrPct: 0, maxAtrPct: 8 } },
@@ -1147,7 +1142,6 @@ function starterRules(defaultRule) {
       id: "rule_multi_period_trend",
       name: "Multi-Period Trend",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
         {
           id: "multi_period_momentum",
           values: {
@@ -1181,7 +1175,6 @@ function starterRules(defaultRule) {
       id: "rule_quiet_trend_compression",
       name: "Quiet Trend Compression",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 500 } },
         { id: "range_compression_10d", values: { minCompression10D: 0, maxCompression10D: 12 } },
         { id: "close_near_20d_high", values: { maxDistanceFrom20DHigh: 3 } },
         { id: "ema_trend", values: { minEmaTrendChecks: 3 } },
@@ -1194,7 +1187,6 @@ function starterRules(defaultRule) {
       id: "rule_discovered_high_rsi_long_momentum_delivery",
       name: "Discovered: High RSI Long Momentum Delivery",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "rsi14_range", values: { rsiMin: 70, rsiMax: 100 } },
         { id: "multi_period_momentum", values: momentumValues({ useMomentum3M: true, useMomentum6M: true }) },
         { id: "delivery_pct_range", values: { minDeliveryPct: 40, maxDeliveryPct: 100 } },
@@ -1204,7 +1196,6 @@ function starterRules(defaultRule) {
       id: "rule_discovered_long_momentum_cci_delivery",
       name: "Discovered: Long Momentum CCI Delivery",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "multi_period_momentum", values: momentumValues({ useMomentum15D: true, useMomentum1Y: true }) },
         { id: "delivery_pct_range", values: { minDeliveryPct: 40, maxDeliveryPct: 100 } },
         { id: "cci14_strong_trend", values: { minCci14: 200, maxCci14: 999 } },
@@ -1214,7 +1205,6 @@ function starterRules(defaultRule) {
       id: "rule_discovered_52w_volume_rsi",
       name: "Discovered: 52W High Volume RSI",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "range_position_52w", values: { minRangePosition52W: 70, maxRangePosition52W: 100 } },
         { id: "relative_volume", values: { minRelativeVolume: 1.5, maxRelativeVolume: 999 } },
         { id: "rsi14_range", values: { rsiMin: 60, rsiMax: 80 } },
@@ -1224,7 +1214,6 @@ function starterRules(defaultRule) {
       id: "rule_discovered_pause_breakout_volume",
       name: "Discovered: Pause Breakout Volume",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
         { id: "price_momentum_3d", values: { minMomentum3D: -3, maxMomentum3D: 3 } },
         { id: "relative_volume", values: { minRelativeVolume: 3, maxRelativeVolume: 999 } },
@@ -1235,7 +1224,6 @@ function starterRules(defaultRule) {
       name: "Deep: Compression EMA Launch",
       description: "Catches stocks that break upward after a tight 10-day range while short-term EMA trend is aligned. Best used as an aggressive all-NSE momentum setup.",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
         { id: "range_compression_10d", values: { minCompression10D: 0, maxCompression10D: 8 } },
         { id: "ema_trend", values: { minEmaTrendChecks: 3 } },
@@ -1245,7 +1233,6 @@ function starterRules(defaultRule) {
       id: "rule_deep_10d_volume_near_high",
       name: "Deep: 10D Volume Near High",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "relative_volume_10d", values: { minRelativeVolume10D: 3, maxRelativeVolume10D: 999 } },
         { id: "price_momentum_3d", values: { minMomentum3D: -3, maxMomentum3D: 3 } },
         { id: "range_position_52w", values: { minRangePosition52W: 80, maxRangePosition52W: 100 } },
@@ -1256,7 +1243,6 @@ function starterRules(defaultRule) {
       name: "Deep: MFI CCI Long Momentum",
       description: "Looks for stocks already in a longer uptrend where money flow is healthy and CCI shows strong price thrust.",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 1000 } },
         { id: "multi_period_momentum", values: momentumValues({ useMomentum15D: true, useMomentum1Y: true }) },
         { id: "mfi14_range", values: { mfiMin: 40, mfiMax: 70 } },
         { id: "cci14_strong_trend", values: { minCci14: 200, maxCci14: 999 } },
@@ -1267,7 +1253,6 @@ function starterRules(defaultRule) {
       name: "Screenshot: Momentum Stocks Proxy",
       description: "Replicates the uploaded momentum screener style using price jump, high RSI, rising RSI, minimum volume, EMA10 above EMA20, and high CCI.",
       filters: [
-        { id: "price_range", values: { minPrice: 100, maxPrice: 999999 } },
         { id: "price_change_1d", values: { minPriceChange1D: 5, maxPriceChange1D: 999 } },
         { id: "rsi14_range", values: { rsiMin: 70, rsiMax: 100 } },
         { id: "rsi14_rising", values: { minRsiRise: 0 } },
