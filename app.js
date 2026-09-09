@@ -666,7 +666,7 @@ function renderStockLab() {
 function renderStockLabDraftRules(lab) {
   const drafts = lab.draftRules || [];
   if (!drafts.length) {
-    el.stockLabDraftRules.innerHTML = `<div class="empty-state">No draft rule suggestions yet. Try a wider date range or lower target %.</div>`;
+    el.stockLabDraftRules.innerHTML = `<div class="empty-state">No profitable draft rule found for this stock and setup. Try a wider date range, different target/stop, or another stock.</div>`;
     return;
   }
   el.stockLabDraftRules.innerHTML = drafts.map((draft, index) => `
@@ -679,7 +679,7 @@ function renderStockLabDraftRules(lab) {
       ${draft.stockBacktest ? `
         <p><strong>On this stock:</strong> ${formatNumber(draft.stockBacktest.trades)} trades, P/L Rs. ${formatMoney(draft.stockBacktest.netPnl)}, return ${formatPct(draft.stockBacktest.returnOnTurnoverPct)}, win ${formatPct(draft.stockBacktest.winRatePct)}.</p>
       ` : ""}
-      <p class="muted">Evidence dates: ${(draft.evidenceDates || []).map((item) => `${formatDate(item.date)} (${formatOptionalPct(item.forwardReturnPct)})`).join(", ") || "N/A"}</p>
+      <p class="muted">Profitable evidence dates: ${(draft.evidenceDates || []).map((item) => `${formatDate(item.date)} (${formatOptionalPct(item.tradeReturnPct)}, Rs. ${formatMoney(item.tradePnl || 0)}, ${escapeHtml(item.exitReason || "exit")})`).join(", ") || "N/A"}</p>
       ${draft.backtest ? `
         <p><strong>Selected group:</strong> ${formatNumber(draft.backtest.trades)} trades, P/L Rs. ${formatMoney(draft.backtest.netPnl)}, return ${formatPct(draft.backtest.returnOnTurnoverPct)}, win ${formatPct(draft.backtest.winRatePct)}.</p>
       ` : ""}

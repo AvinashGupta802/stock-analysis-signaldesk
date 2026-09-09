@@ -886,6 +886,7 @@ def suggest_stock_draft_rules(symbol, contexts, target_pct):
 
 def add_stock_backtests_to_drafts(drafts, contexts, rows, target_pct, stop_pct, max_hold_days):
     rows_by_symbol = {contexts[0]["symbol"]: rows} if contexts else {}
+    accepted = []
     for draft in drafts:
         rule = normalize_rule(draft["rule"])
         picks_by_date = defaultdict(list)
@@ -903,12 +904,39 @@ def add_stock_backtests_to_drafts(drafts, contexts, rows, target_pct, stop_pct, 
                 }
             )
         trades = simulate_trades(picks_by_date, rows_by_symbol, 1, 10_000, target_pct, stop_pct, max_hold_days)
+        profitable_trades = sorted(
+            [trade for trade in trades if trade["pnl"] > 0],
+            key=lambda trade: trade["pnl"],
+            reverse=True,
+        )
         draft["stockBacktest"] = {
             "totalSignals": sum(len(items) for items in picks_by_date.values()),
             "signalDays": len(picks_by_date),
             **summarize_trades(trades, 10_000),
         }
-    return drafts
+        draft["evidenceDates"] = [
+            {
+                "date": trade["signalDate"],
+                "entryDate": trade["entryDate"],
+                "exitDate": trade["exitDate"],
+                "exitReason": trade["exitReason"],
+                "tradeReturnPct": trade["returnPct"],
+                "tradePnl": trade["pnl"],
+            }
+            for trade in profitable_trades[:5]
+        ]
+        summary = draft["stockBacktest"]
+        if summary["trades"] >= 3 and summary["netPnl"] > 0 and summary["winRatePct"] >= 50:
+            accepted.append(draft)
+    accepted.sort(
+        key=lambda item: (
+            item["stockBacktest"]["returnOnTurnoverPct"],
+            item["stockBacktest"]["winRatePct"],
+            item["stockBacktest"]["trades"],
+        ),
+        reverse=True,
+    )
+    return accepted
 
 
 def get_stock_lab(payload):
