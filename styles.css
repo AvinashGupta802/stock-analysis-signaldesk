@@ -705,6 +705,35 @@ input[type="search"] {
   cursor: default;
 }
 
+.section-title.stacked {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 18px;
+}
+
+.section-title.stacked span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.draft-rule-card ul {
+  margin: 10px 0;
+}
+
+.draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.draft-actions button {
+  width: auto;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
 @media (max-width: 1050px) {
   .stock-lab-workspace {
     grid-template-columns: 1fr;

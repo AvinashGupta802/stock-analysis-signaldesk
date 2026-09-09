@@ -163,6 +163,8 @@
               <input id="stockLabHoldInput" type="number" min="1" max="30" step="1" value="5" />
             </label>
           </div>
+          <label for="stockLabGroupSelect">Draft backtest stock group</label>
+          <select id="stockLabGroupSelect"></select>
           <button id="stockLabButton" type="button">Run Stock Lab</button>
           <p id="stockLabStatus" class="helper-text">Enter a stock to see which system rules caught it historically.</p>
         </section>
@@ -263,11 +265,16 @@
               <h2>Best Fit Groups</h2>
             </div>
             <div id="stockLabBestGroups" class="stock-details"></div>
+            <div class="section-title stacked">
+              <h2>Draft Rule Suggestions</h2>
+              <span>Created from periods where this stock had strong forward movement.</span>
+            </div>
+            <div id="stockLabDraftRules" class="stock-details"></div>
           </aside>
         </section>
       </section>
     </main>
 
-    <script src="./app.js?v=builder-32"></script>
+    <script src="./app.js?v=builder-33"></script>
   </body>
 </html>

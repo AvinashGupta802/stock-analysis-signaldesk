@@ -170,6 +170,7 @@ const el = {
   stockLabTargetInput: document.querySelector("#stockLabTargetInput"),
   stockLabStopInput: document.querySelector("#stockLabStopInput"),
   stockLabHoldInput: document.querySelector("#stockLabHoldInput"),
+  stockLabGroupSelect: document.querySelector("#stockLabGroupSelect"),
   stockLabButton: document.querySelector("#stockLabButton"),
   stockLabStatus: document.querySelector("#stockLabStatus"),
   analysisWorkspace: document.querySelector("#analysisWorkspace"),
@@ -179,6 +180,7 @@ const el = {
   stockLabSummary: document.querySelector("#stockLabSummary"),
   stockLabBody: document.querySelector("#stockLabBody"),
   stockLabBestGroups: document.querySelector("#stockLabBestGroups"),
+  stockLabDraftRules: document.querySelector("#stockLabDraftRules"),
   statusText: document.querySelector("#statusText"),
   pageTitle: document.querySelector("#pageTitle"),
   metricsGrid: document.querySelector("#metricsGrid"),
@@ -583,6 +585,10 @@ function renderStockLabControls() {
   if (!el.stockLabTargetInput.value) el.stockLabTargetInput.value = 10;
   if (!el.stockLabStopInput.value) el.stockLabStopInput.value = 7;
   if (!el.stockLabHoldInput.value) el.stockLabHoldInput.value = 5;
+  const selectedGroup = el.stockLabGroupSelect.value || state.groupId || "all";
+  el.stockLabGroupSelect.innerHTML = state.groups.map((group) => `
+    <option value="${escapeHtml(group.id)}" ${group.id === selectedGroup ? "selected" : ""}>${escapeHtml(group.name)}</option>
+  `).join("");
 }
 
 function renderMetrics() {
@@ -605,6 +611,7 @@ function renderStockLab() {
     el.stockLabSummary.innerHTML = "";
     el.stockLabBody.innerHTML = `<tr><td colspan="10" class="empty-state">Enter a stock symbol and run Stock Lab.</td></tr>`;
     el.stockLabBestGroups.innerHTML = `<div class="empty-state">Best-fit groups will appear after the stock is analyzed.</div>`;
+    el.stockLabDraftRules.innerHTML = `<div class="empty-state">Draft suggestions will appear after a stock has enough winning history.</div>`;
     return;
   }
   const lab = state.stockLab;
@@ -652,6 +659,46 @@ function renderStockLab() {
       ${group.description ? `<p class="muted">${escapeHtml(group.description)}</p>` : ""}
     </div>
   `).join("") : `<div class="empty-state">No rule group has enough matching history for this stock.</div>`;
+  renderStockLabDraftRules(lab);
+}
+
+function renderStockLabDraftRules(lab) {
+  const drafts = lab.draftRules || [];
+  if (!drafts.length) {
+    el.stockLabDraftRules.innerHTML = `<div class="empty-state">No draft rule suggestions yet. Try a wider date range or lower target %.</div>`;
+    return;
+  }
+  el.stockLabDraftRules.innerHTML = drafts.map((draft, index) => `
+    <div class="detail-block draft-rule-card">
+      <h3>${escapeHtml(draft.name)}</h3>
+      <p>${escapeHtml(draft.description || "")}</p>
+      <ul>
+        ${(draft.rule?.filters || []).map((filter) => `<li><strong>${escapeHtml(filterDefinition(filter.id)?.name || filter.id)}:</strong> ${escapeHtml(humanValues(filter))}</li>`).join("")}
+      </ul>
+      <p class="muted">Evidence dates: ${(draft.evidenceDates || []).map((item) => `${formatDate(item.date)} (${formatOptionalPct(item.forwardReturnPct)})`).join(", ") || "N/A"}</p>
+      ${draft.backtest ? `
+        <p><strong>${formatNumber(draft.backtest.trades)}</strong> trades, P/L Rs. ${formatMoney(draft.backtest.netPnl)}, return ${formatPct(draft.backtest.returnOnTurnoverPct)}, win ${formatPct(draft.backtest.winRatePct)}.</p>
+      ` : ""}
+      <div class="draft-actions">
+        <button type="button" data-backtest-draft="${index}">Backtest Draft</button>
+        <button type="button" data-create-draft-rule="${index}">Create Rule</button>
+        <button type="button" data-create-draft-group="${index}">Create Rule Group</button>
+      </div>
+    </div>
+  `).join("");
+  bindStockLabDraftActions();
+}
+
+function bindStockLabDraftActions() {
+  el.stockLabDraftRules.querySelectorAll("button[data-backtest-draft]").forEach((button) => {
+    button.addEventListener("click", () => backtestDraftRule(Number(button.dataset.backtestDraft)));
+  });
+  el.stockLabDraftRules.querySelectorAll("button[data-create-draft-rule]").forEach((button) => {
+    button.addEventListener("click", () => createDraftRule(Number(button.dataset.createDraftRule), false));
+  });
+  el.stockLabDraftRules.querySelectorAll("button[data-create-draft-group]").forEach((button) => {
+    button.addEventListener("click", () => createDraftRule(Number(button.dataset.createDraftGroup), true));
+  });
 }
 
 function renderTable() {
@@ -859,6 +906,64 @@ async function runStockLab() {
     el.stockLabButton.disabled = false;
     el.stockLabButton.textContent = "Run Stock Lab";
   }
+}
+
+async function backtestDraftRule(index) {
+  const draft = state.stockLab?.draftRules?.[index];
+  if (!draft?.rule) return;
+  el.stockLabStatus.textContent = `Backtesting ${draft.name}...`;
+  try {
+    const result = await postJson("/api/rule/backtest", {
+      rule: draft.rule,
+      group: el.stockLabGroupSelect.value || state.groupId || "all",
+      fromDate: el.stockLabFromDateInput.value || state.defaultBacktest.fromDate,
+      toDate: el.stockLabToDateInput.value || state.defaultBacktest.toDate,
+      topN: 10,
+      capitalPerStock: 10000,
+      targetPct: Number(el.stockLabTargetInput.value) || 10,
+      stopPct: Number(el.stockLabStopInput.value) || 7,
+      maxHoldDays: Number(el.stockLabHoldInput.value) || 5,
+      universeFilters: [],
+    });
+    draft.backtest = result.summary;
+    el.stockLabStatus.textContent = `${draft.name}: ${formatNumber(result.summary.trades)} trades, return ${formatPct(result.summary.returnOnTurnoverPct)}.`;
+    renderStockLab();
+  } catch (error) {
+    el.stockLabStatus.textContent = error.message;
+  }
+}
+
+function createDraftRule(index, alsoCreateGroup) {
+  const draft = state.stockLab?.draftRules?.[index];
+  if (!draft?.rule) return;
+  const existing = state.rules.find((rule) => rule.name === draft.name);
+  const rule = existing || {
+    ...draft.rule,
+    id: createId("rule_user"),
+    kind: "user",
+    description: draft.description || "",
+  };
+  if (!existing) state.rules.push(rule);
+  state.activeRuleIndex = state.rules.findIndex((item) => item.id === rule.id);
+  if (alsoCreateGroup) {
+    const groupName = `${draft.name} Group`;
+    const existingGroup = state.ruleGroups.find((group) => group.name === groupName);
+    if (!existingGroup) {
+      state.ruleGroups.push({
+        id: createId("group_user"),
+        name: groupName,
+        description: `User-created group from Stock Lab draft rule: ${draft.description || draft.name}`,
+        kind: "user",
+        minMatches: 1,
+        ruleIds: [rule.id],
+      });
+    }
+    state.activeRuleGroupIndex = state.ruleGroups.findIndex((group) => group.name === groupName);
+  }
+  saveRules();
+  saveRuleGroups();
+  renderAll();
+  el.stockLabStatus.textContent = alsoCreateGroup ? `${draft.name} saved as a rule and rule group.` : `${draft.name} saved as a user rule.`;
 }
 
 async function createCombinedStockGroup() {

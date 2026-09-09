@@ -563,6 +563,163 @@ def get_rule_group_results(payload):
     }
 
 
+def rounded_floor(value, step, fallback):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if number <= 0:
+        return fallback
+    return max(fallback, int(number / step) * step)
+
+
+def rounded_ratio(value, fallback):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if number <= 0:
+        return fallback
+    return round(max(fallback, number * 0.8), 1)
+
+
+def median(values, fallback=0):
+    clean = sorted(float(value) for value in values if value is not None)
+    if not clean:
+        return fallback
+    midpoint = len(clean) // 2
+    if len(clean) % 2:
+        return clean[midpoint]
+    return (clean[midpoint - 1] + clean[midpoint]) / 2
+
+
+def suggest_stock_draft_rules(symbol, contexts, target_pct):
+    winners = [
+        item for item in contexts
+        if (item["tradeOutcome"] and item["tradeOutcome"]["returnPct"] > 0)
+        or (item["forwardReturns"].get("5D") is not None and item["forwardReturns"]["5D"] >= target_pct * 0.6)
+        or (item["forwardReturns"].get("10D") is not None and item["forwardReturns"]["10D"] >= target_pct * 0.8)
+    ]
+    if len(winners) < 3:
+        return []
+
+    evidence = sorted(
+        winners,
+        key=lambda item: max(
+            item["forwardReturns"].get("5D") or -999,
+            item["forwardReturns"].get("10D") or -999,
+            item["forwardReturns"].get("15D") or -999,
+        ),
+        reverse=True,
+    )[:5]
+
+    def evidence_dates():
+        rows = []
+        for item in evidence:
+            best_return = max(
+                item["forwardReturns"].get("5D") or -999,
+                item["forwardReturns"].get("10D") or -999,
+                item["forwardReturns"].get("15D") or -999,
+            )
+            rows.append({"date": item["date"], "forwardReturnPct": best_return if best_return > -999 else None})
+        return rows
+
+    min_delivery = min(85, rounded_floor(median([item["deliveryPct"] for item in winners], 50), 5, 40))
+    min_relative_delivery = min(4, rounded_ratio(median([item["relativeDelivery"] for item in winners], 1.5), 1.2))
+    min_relative_volume = min(5, rounded_ratio(median([item["relativeVolume"] for item in winners], 1.5), 1.2))
+    min_relative_volume_10d = min(5, rounded_ratio(median([item["relativeVolume10D"] for item in winners], 1.5), 1.2))
+    min_rsi = min(70, max(45, rounded_floor(median([item["rsi14"] for item in winners], 55), 5, 50)))
+    min_mfi = min(75, max(45, rounded_floor(median([item["mfi14"] for item in winners], 55), 5, 50)))
+    min_cci = min(250, max(80, rounded_floor(median([item["cci14"] for item in winners], 110), 10, 90)))
+    max_atr = min(15, max(5, round(median([item["atrPct"] for item in winners], 8) + 2, 1)))
+    min_52w_position = min(90, max(55, rounded_floor(median([item["rangePosition52W"] for item in winners], 70), 5, 60)))
+
+    drafts = [
+        {
+            "name": f"Draft: {symbol} Delivery Breakout",
+            "description": "Looks for delivery accumulation plus price pressing near a 20-day high, useful for positional breakout candidates.",
+            "rule": {
+                "name": f"Draft: {symbol} Delivery Breakout",
+                "description": "Delivery quantity and delivery percentage confirm buyer participation near a recent high.",
+                "filters": [
+                    {"id": "delivery_pct_range", "values": {"minDeliveryPct": min_delivery, "maxDeliveryPct": 100}},
+                    {"id": "relative_delivery_qty", "values": {"minRelativeDelivery": min_relative_delivery, "maxRelativeDelivery": 999}},
+                    {"id": "close_near_20d_high", "values": {"maxDistanceFrom20DHigh": 3}},
+                    {"id": "atr_risk", "values": {"minAtrPct": 0, "maxAtrPct": max_atr}},
+                ],
+            },
+            "evidenceDates": evidence_dates(),
+        },
+        {
+            "name": f"Draft: {symbol} Pause Breakout",
+            "description": "Finds stocks with tight short-term price movement, stronger volume, and a close near the recent high.",
+            "rule": {
+                "name": f"Draft: {symbol} Pause Breakout",
+                "description": "A quiet 3-day move plus volume can indicate fresh participation after consolidation.",
+                "filters": [
+                    {"id": "price_momentum_3d", "values": {"minMomentum3D": -2, "maxMomentum3D": 4}},
+                    {"id": "relative_volume", "values": {"minRelativeVolume": min_relative_volume, "maxRelativeVolume": 999}},
+                    {"id": "close_near_20d_high", "values": {"maxDistanceFrom20DHigh": 3}},
+                    {"id": "range_compression_10d", "values": {"minCompression10D": 0, "maxCompression10D": 14}},
+                ],
+            },
+            "evidenceDates": evidence_dates(),
+        },
+        {
+            "name": f"Draft: {symbol} Momentum Flow",
+            "description": "Combines larger price trend with money flow and CCI strength to catch high-demand momentum stocks.",
+            "rule": {
+                "name": f"Draft: {symbol} Momentum Flow",
+                "description": "Momentum across 15D/1M/3M should align with MFI and CCI buying pressure.",
+                "filters": [
+                    {"id": "multi_period_momentum", "values": {
+                        "useMomentum1W": False,
+                        "minMomentum1W": 0,
+                        "maxMomentum1W": 15,
+                        "useMomentum15D": True,
+                        "minMomentum15D": 2,
+                        "maxMomentum15D": 35,
+                        "useMomentum1M": True,
+                        "minMomentum1M": 5,
+                        "maxMomentum1M": 60,
+                        "useMomentum3M": True,
+                        "minMomentum3M": 8,
+                        "maxMomentum3M": 120,
+                        "useMomentum6M": False,
+                        "minMomentum6M": 15,
+                        "maxMomentum6M": 150,
+                        "useMomentum1Y": False,
+                        "minMomentum1Y": 20,
+                        "maxMomentum1Y": 250,
+                        "useMomentum6MTo12M": False,
+                        "minMomentum6MTo12M": -20,
+                        "maxMomentum6MTo12M": 80,
+                    }},
+                    {"id": "mfi14_range", "values": {"mfiMin": min_mfi, "mfiMax": 90}},
+                    {"id": "cci14_strong_trend", "values": {"minCci14": min_cci, "maxCci14": 999}},
+                ],
+            },
+            "evidenceDates": evidence_dates(),
+        },
+        {
+            "name": f"Draft: {symbol} Controlled Strength",
+            "description": "Searches for stocks already strong in their 52-week range, but keeps RSI and volatility within editable limits.",
+            "rule": {
+                "name": f"Draft: {symbol} Controlled Strength",
+                "description": "Trend strength is accepted only when RSI and ATR risk are not extreme.",
+                "filters": [
+                    {"id": "range_position_52w", "values": {"minRangePosition52W": min_52w_position, "maxRangePosition52W": 100}},
+                    {"id": "rsi14_range", "values": {"rsiMin": min_rsi, "rsiMax": 82}},
+                    {"id": "relative_volume_10d", "values": {"minRelativeVolume10D": min_relative_volume_10d, "maxRelativeVolume10D": 999}},
+                    {"id": "atr_risk", "values": {"minAtrPct": 0, "maxAtrPct": max_atr}},
+                ],
+            },
+            "evidenceDates": evidence_dates(),
+        },
+    ]
+    return drafts
+
+
 def get_stock_lab(payload):
     symbol = str(payload.get("symbol") or "").strip().upper()
     if not symbol:
@@ -593,14 +750,42 @@ def get_stock_lab(payload):
         return {"error": f"{symbol} does not have enough history for Stock Lab."}
     indicators = build_indicators(rows)
     events = []
+    suggestion_contexts = []
     group_picks = {group["id"]: defaultdict(list) for group in groups}
     rows_by_symbol = {symbol: rows}
-    max_forward = max(15, max_hold_days)
     for index in range(21, len(rows) - 1):
         row = rows[index]
         if row["trade_date"] < from_date or row["trade_date"] > to_date:
             continue
         ctx = build_backtest_context(rows, indicators, index)
+        forward = forward_returns(rows, index, [2, 5, 10, 15])
+        outcome = simulate_single_trade(rows, index, target_pct, stop_pct, max_hold_days)
+        lab_context = {
+            "date": row["trade_date"],
+            "close": row["close"],
+            "volume": row["volume"],
+            "deliveryPct": ctx["delivery_pct"],
+            "relativeVolume": ctx["relative_volume"],
+            "relativeVolume10D": ctx["relative_volume_10d"],
+            "relativeDelivery": ctx["relative_delivery"],
+            "momentum3D": ctx["momentum_3d"],
+            "momentum1W": ctx["momentum_1w"],
+            "momentum15D": ctx["momentum_15d"],
+            "momentum1M": ctx["momentum_1m"],
+            "momentum3M": ctx["momentum_3m"],
+            "momentum6M": ctx["momentum_6m"],
+            "rangePosition52W": ctx["range_position_52w"],
+            "distanceFrom20DHigh": ctx["distance_from_20d_high"],
+            "closePositionDay": ctx["close_position_day"],
+            "compression10D": ctx["compression_10d"],
+            "rsi14": ctx["rsi14"],
+            "mfi14": ctx["mfi14"],
+            "cci14": ctx["cci14"],
+            "atrPct": ctx["atr_pct"],
+            "forwardReturns": forward,
+            "tradeOutcome": outcome,
+        }
+        suggestion_contexts.append(lab_context)
         matched_rules = []
         for rule in rules:
             passed, reasons = apply_rule(ctx, rule)
@@ -640,27 +825,10 @@ def get_stock_lab(payload):
                 )
         if not matched_rules and not matched_groups:
             continue
-        events.append(
-            {
-                "date": row["trade_date"],
-                "close": row["close"],
-                "volume": row["volume"],
-                "deliveryPct": ctx["delivery_pct"],
-                "relativeVolume": ctx["relative_volume"],
-                "relativeDelivery": ctx["relative_delivery"],
-                "momentum3D": ctx["momentum_3d"],
-                "momentum15D": ctx["momentum_15d"],
-                "rangePosition52W": ctx["range_position_52w"],
-                "rsi14": ctx["rsi14"],
-                "mfi14": ctx["mfi14"],
-                "cci14": ctx["cci14"],
-                "atrPct": ctx["atr_pct"],
-                "forwardReturns": forward_returns(rows, index, [2, 5, 10, 15]),
-                "tradeOutcome": simulate_single_trade(rows, index, target_pct, stop_pct, max_hold_days),
-                "matchedRules": matched_rules,
-                "matchedGroups": matched_groups,
-            }
-        )
+        event = dict(lab_context)
+        event["matchedRules"] = matched_rules
+        event["matchedGroups"] = matched_groups
+        events.append(event)
     best_groups = summarize_stock_group_results(groups, group_picks, rows_by_symbol, target_pct, stop_pct, max_hold_days)
     latest = latest_stock_snapshot(rows, indicators)
     return {
@@ -675,6 +843,7 @@ def get_stock_lab(payload):
         "totalEvents": len(events),
         "bestGroups": best_groups[:12],
         "latest": latest,
+        "draftRules": suggest_stock_draft_rules(stock["symbol"], suggestion_contexts, target_pct),
     }
 
 
