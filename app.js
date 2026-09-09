@@ -114,6 +114,7 @@ const state = {
   date: null,
   search: "",
   results: [],
+  resultSource: "",
   metrics: {},
   prices: [],
   selectedSymbol: null,
@@ -702,7 +703,8 @@ function bindStockLabDraftActions() {
 }
 
 function renderTable() {
-  el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown`;
+  const sourceLabel = state.resultSource === "stored_eod" ? "Stored EOD" : state.resultSource === "live" ? "Live calculation" : "";
+  el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown${sourceLabel ? ` - ${sourceLabel}` : ""}`;
   if (!state.results.length) {
     el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
     return;
@@ -827,10 +829,11 @@ async function runRuleScan(seq) {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Running rule...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Loading stored EOD results if available...</td></tr>`;
   const result = await postJson("/api/rule/results", payload);
   if (seq !== state.scanSeq) return;
   state.results = result.results || [];
+  state.resultSource = result.source || "";
   state.metrics = result.metrics || {};
   state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
   if (state.selectedSymbol) {
@@ -1041,10 +1044,11 @@ async function runRuleGroupScan(seq) {
     search: state.search,
     limit: 200,
   };
-  el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Running rule group...</td></tr>`;
+  el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Loading stored EOD results if available...</td></tr>`;
   const result = await postJson("/api/rule-group/results", payload);
   if (seq !== state.scanSeq) return;
   state.results = result.results || [];
+  state.resultSource = result.source || "";
   state.metrics = result.metrics || {};
   state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
   if (state.selectedSymbol) {

@@ -505,12 +505,17 @@ def get_bootstrap():
 
 
 def get_rule_results(payload):
-    rule = normalize_rule(payload.get("rule") or DEFAULT_RULE)
+    raw_rule = payload.get("rule") if isinstance(payload.get("rule"), dict) else DEFAULT_RULE
+    rule = normalize_rule(raw_rule)
     universe_filters = normalize_universe_filters(payload.get("universeFilters"))
     group = payload.get("group") or "all"
     trade_date = payload.get("date")
     search = str(payload.get("search") or "").strip().upper()
     limit = int(payload.get("limit") or 200)
+    with connect() as conn:
+        stored = get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade_date, search, limit)
+        if stored:
+            return stored
     rows = []
     with connect() as conn:
         stocks = load_group_stocks(conn, group)
@@ -529,11 +534,14 @@ def get_rule_results(payload):
         "total": len(rows),
         "results": rows[:limit],
         "metrics": build_scan_metrics(rows),
+        "source": "live",
     }
 
 
 def get_rule_group_results(payload):
-    rules = normalize_rules(payload.get("rules") or [DEFAULT_RULE])
+    raw_rules = [rule for rule in payload.get("rules") or [DEFAULT_RULE] if isinstance(rule, dict)]
+    rules = [normalize_rule(rule) for rule in raw_rules]
+    rules = [rule for rule in rules if rule["filters"]]
     universe_filters = normalize_universe_filters(payload.get("universeFilters"))
     group = payload.get("group") or "all"
     trade_date = payload.get("date")
@@ -541,6 +549,10 @@ def get_rule_group_results(payload):
     limit = int(payload.get("limit") or 200)
     min_matches = int(payload.get("minMatches") or len(rules) or 1)
     min_matches = max(1, min(min_matches, len(rules) or 1))
+    with connect() as conn:
+        stored = get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, group, trade_date, search, limit, min_matches)
+        if stored:
+            return stored
     rows = []
     with connect() as conn:
         stocks = load_group_stocks(conn, group)
@@ -560,7 +572,159 @@ def get_rule_group_results(payload):
         "total": len(rows),
         "results": rows[:limit],
         "metrics": build_scan_metrics(rows),
+        "source": "live",
     }
+
+
+def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade_date, search, limit):
+    stored_rule = match_stored_rule(conn, raw_rule, rule)
+    if not stored_rule or not trade_date:
+        return None
+    group_symbols = {stock["symbol"] for stock in load_group_stocks(conn, group)}
+    if not group_symbols:
+        return None
+    rows = []
+    for row in conn.execute(
+        """
+        SELECT result_json
+        FROM rule_daily_results
+        WHERE trade_date = ? AND rule_id = ? AND rule_version = ? AND exchange = 'NSE' AND passed = 1
+        """,
+        (trade_date, stored_rule["rule_id"], stored_rule["version"]),
+    ):
+        result = json.loads(row["result_json"])
+        if result["symbol"] not in group_symbols:
+            continue
+        if search and search not in result["symbol"].upper() and search not in (result.get("name") or "").upper():
+            continue
+        if not apply_stored_universe_filters(result, universe_filters):
+            continue
+        rows.append(result)
+    if not rows and not has_stored_rule_date(conn, trade_date, stored_rule):
+        return None
+    rows.sort(key=lambda item: (item.get("volume") or 0, item["symbol"]), reverse=True)
+    return {
+        "rule": rule,
+        "universeFilters": universe_filters,
+        "date": trade_date,
+        "group": group,
+        "total": len(rows),
+        "results": rows[:limit],
+        "metrics": build_scan_metrics(rows),
+        "source": "stored_eod",
+    }
+
+
+def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, group, trade_date, search, limit, min_matches):
+    if not trade_date or len(raw_rules) != len(rules):
+        return None
+    stored_rules = []
+    for raw_rule, rule in zip(raw_rules, rules):
+        stored_rule = match_stored_rule(conn, raw_rule, rule)
+        if not stored_rule or not has_stored_rule_date(conn, trade_date, stored_rule):
+            return None
+        stored_rules.append(stored_rule)
+    group_symbols = {stock["symbol"] for stock in load_group_stocks(conn, group)}
+    if not group_symbols:
+        return None
+    by_symbol = {}
+    for stored_rule in stored_rules:
+        for row in conn.execute(
+            """
+            SELECT result_json
+            FROM rule_daily_results
+            WHERE trade_date = ? AND rule_id = ? AND rule_version = ? AND exchange = 'NSE' AND passed = 1
+            """,
+            (trade_date, stored_rule["rule_id"], stored_rule["version"]),
+        ):
+            rule_result = json.loads(row["result_json"])
+            symbol = rule_result["symbol"]
+            if symbol not in group_symbols:
+                continue
+            if search and search not in symbol.upper() and search not in (rule_result.get("name") or "").upper():
+                continue
+            if not apply_stored_universe_filters(rule_result, universe_filters):
+                continue
+            item = by_symbol.setdefault(symbol, dict(rule_result))
+            item.setdefault("matchedRules", [])
+            item["matchedRules"].append(
+                {
+                    "name": stored_rule["name"],
+                    "reasons": rule_result.get("reasons") or [],
+                }
+            )
+    rows = []
+    for item in by_symbol.values():
+        match_count = len(item.get("matchedRules") or [])
+        if match_count < min_matches:
+            continue
+        item["passed"] = True
+        item["matchCount"] = match_count
+        item["totalRules"] = len(rules)
+        item["minMatches"] = min_matches
+        item["reasons"] = item.get("matchedRules", [{}])[0].get("reasons", [])
+        rows.append(item)
+    rows.sort(key=lambda item: (item["matchCount"], item.get("volume") or 0, item["symbol"]), reverse=True)
+    return {
+        "rules": rules,
+        "universeFilters": universe_filters,
+        "date": trade_date,
+        "group": group,
+        "minMatches": min_matches,
+        "total": len(rows),
+        "results": rows[:limit],
+        "metrics": build_scan_metrics(rows),
+        "source": "stored_eod",
+    }
+
+
+def match_stored_rule(conn, raw_rule, rule):
+    filters_json = json.dumps(signal_filters(rule), sort_keys=True)
+    raw_id = raw_rule.get("id") if isinstance(raw_rule, dict) else None
+    raw_version = raw_rule.get("version") if isinstance(raw_rule, dict) else None
+    if raw_id:
+        row = conn.execute(
+            """
+            SELECT rule_id, name, version, filters_json
+            FROM strategy_rules
+            WHERE rule_id = ? AND status = 'active'
+            """,
+            (raw_id,),
+        ).fetchone()
+        if row and row["filters_json"] == filters_json:
+            if raw_version and int(raw_version) != int(row["version"]):
+                return None
+            return row
+    row = conn.execute(
+        """
+        SELECT rule_id, name, version, filters_json
+        FROM strategy_rules
+        WHERE name = ? AND filters_json = ? AND status = 'active'
+        LIMIT 1
+        """,
+        (rule["name"], filters_json),
+    ).fetchone()
+    return row
+
+
+def has_stored_rule_date(conn, trade_date, stored_rule):
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM rule_daily_results
+        WHERE trade_date = ? AND rule_id = ? AND rule_version = ?
+        LIMIT 1
+        """,
+        (trade_date, stored_rule["rule_id"], stored_rule["version"]),
+    ).fetchone()
+    return bool(row)
+
+
+def apply_stored_universe_filters(result, universe_filters):
+    if not universe_filters:
+        return True
+    ctx = {"close": result.get("close") or 0}
+    return apply_universe_filters(ctx, universe_filters)[0]
 
 
 def rounded_floor(value, step, fallback):
@@ -2255,18 +2419,39 @@ def store_rule_daily_results(conn, trade_date, rules):
                 "relativeVolume": ctx["relative_volume"],
                 "priceChange1D": ctx["price_change_1d"],
                 "momentum3D": ctx["momentum_3d"],
+                "momentum1W": ctx["momentum_1w"],
+                "momentum15D": ctx["momentum_15d"],
+                "momentum1M": ctx["momentum_1m"],
+                "momentum3M": ctx["momentum_3m"],
+                "momentum6M": ctx["momentum_6m"],
+                "momentum1Y": ctx["momentum_1y"],
+                "momentum6MTo12M": ctx["momentum_6m_to_12m"],
+                "adv10": ctx["adv10"],
+                "adv20": ctx["adv20"],
+                "avgDelivery20": ctx["avg_delivery_20"],
+                "high52W": ctx["high_52w"],
+                "low52W": ctx["low_52w"],
                 "rangePosition52W": ctx["range_position_52w"],
+                "high20D": ctx["high_20d"],
                 "distanceFrom20DHigh": ctx["distance_from_20d_high"],
                 "closePositionDay": ctx["close_position_day"],
                 "compression10D": ctx["compression_10d"],
                 "rupeeLiquidityCr": ctx["rupee_liquidity_cr"],
+                "ema9": ctx["ema9"],
+                "ema10": ctx["ema10"],
+                "ema20": ctx["ema20"],
+                "sma50": ctx["sma50"],
                 "rsi14": ctx["rsi14"],
+                "previousRsi14": ctx["previous_rsi14"],
                 "mfi14": ctx["mfi14"],
                 "cci14": ctx["cci14"],
+                "atr14": ctx["atr14"],
                 "atrPct": ctx["atr_pct"],
                 "macdLine": ctx["macd_line"],
                 "macdSignal": ctx["macd_signal"],
                 "macdHistogram": ctx["macd_histogram"],
+                "macdHistogramChange": ctx["macd_histogram_change"],
+                "obv3D": ctx["obv_3d"],
                 "nextDate": next_row["trade_date"] if next_row else None,
                 "nextClose": next_row["close"] if next_row else None,
                 "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
