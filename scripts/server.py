@@ -382,6 +382,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(get_bootstrap())
         if parsed.path == "/api/prices":
             return self.send_json(get_prices(parse_qs(parsed.query)))
+        if parsed.path == "/api/stocks/search":
+            return self.send_json(search_stocks(parse_qs(parsed.query)))
         return super().do_GET()
 
     def do_POST(self):
@@ -501,6 +503,38 @@ def get_bootstrap():
             "stopPct": 5,
             "maxHoldDays": 5,
         },
+    }
+
+
+def search_stocks(params):
+    query = str((params.get("q") or [""])[0]).strip().upper()
+    limit = int((params.get("limit") or ["12"])[0] or 12)
+    limit = max(1, min(limit, 25))
+    if len(query) < 2:
+        return {"results": []}
+    like = f"%{query}%"
+    starts = f"{query}%"
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT symbol, COALESCE(name, symbol) AS name, last_trade_date
+            FROM instruments
+            WHERE exchange = 'NSE'
+              AND series = 'EQ'
+              AND isin LIKE 'INE%'
+              AND (symbol LIKE ? OR name LIKE ?)
+            ORDER BY
+              CASE WHEN symbol = ? THEN 0 WHEN symbol LIKE ? THEN 1 ELSE 2 END,
+              symbol
+            LIMIT ?
+            """,
+            (like, like, query, starts, limit),
+        ).fetchall()
+    return {
+        "results": [
+            {"symbol": row["symbol"], "name": row["name"], "lastTradeDate": row["last_trade_date"]}
+            for row in rows
+        ]
     }
 
 

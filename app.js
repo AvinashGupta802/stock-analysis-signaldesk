@@ -119,6 +119,7 @@ const state = {
   prices: [],
   selectedSymbol: null,
   stockLab: null,
+  stockLabSuggestions: [],
   backtest: null,
   defaultBacktest: null,
   strategySaveTimer: null,
@@ -166,6 +167,7 @@ const el = {
   maxHoldInput: document.querySelector("#maxHoldInput"),
   backtestButton: document.querySelector("#backtestButton"),
   stockLabSymbolInput: document.querySelector("#stockLabSymbolInput"),
+  stockLabSuggestions: document.querySelector("#stockLabSuggestions"),
   stockLabFromDateInput: document.querySelector("#stockLabFromDateInput"),
   stockLabToDateInput: document.querySelector("#stockLabToDateInput"),
   stockLabTargetInput: document.querySelector("#stockLabTargetInput"),
@@ -344,6 +346,10 @@ function bindShell() {
   }, 250));
   el.backtestButton.addEventListener("click", runBacktest);
   el.stockLabButton.addEventListener("click", runStockLab);
+  el.stockLabSymbolInput.addEventListener("input", debounce(searchStockLabSymbols, 180));
+  el.stockLabSymbolInput.addEventListener("blur", () => {
+    setTimeout(() => hideStockLabSuggestions(), 150);
+  });
   el.stockLabSymbolInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") runStockLab();
   });
@@ -883,11 +889,12 @@ async function runBacktest() {
 }
 
 async function runStockLab() {
-  const symbol = el.stockLabSymbolInput.value.trim().toUpperCase();
+  const symbol = parseStockSymbolInput(el.stockLabSymbolInput.value);
   if (!symbol) {
     el.stockLabStatus.textContent = "Enter a stock symbol first.";
     return;
   }
+  hideStockLabSuggestions();
   el.stockLabButton.disabled = true;
   el.stockLabButton.textContent = "Analyzing...";
   el.stockLabStatus.textContent = `Analyzing ${symbol} across system rules...`;
@@ -912,6 +919,55 @@ async function runStockLab() {
     el.stockLabButton.disabled = false;
     el.stockLabButton.textContent = "Run Stock Lab";
   }
+}
+
+async function searchStockLabSymbols() {
+  const query = el.stockLabSymbolInput.value.trim();
+  if (query.length < 2) {
+    hideStockLabSuggestions();
+    return;
+  }
+  try {
+    const data = await fetchJson(`/api/stocks/search?q=${encodeURIComponent(query)}&limit=10`);
+    state.stockLabSuggestions = data.results || [];
+    renderStockLabSuggestions();
+  } catch (error) {
+    hideStockLabSuggestions();
+  }
+}
+
+function renderStockLabSuggestions() {
+  const suggestions = state.stockLabSuggestions || [];
+  if (!suggestions.length) {
+    el.stockLabSuggestions.hidden = true;
+    el.stockLabSuggestions.innerHTML = "";
+    return;
+  }
+  el.stockLabSuggestions.hidden = false;
+  el.stockLabSuggestions.innerHTML = suggestions.map((stock) => `
+    <button type="button" data-stock-lab-symbol="${escapeHtml(stock.symbol)}">
+      <strong>${escapeHtml(stock.symbol)}</strong>
+      <span>${escapeHtml(stock.name)}${stock.lastTradeDate ? ` - latest ${formatDate(stock.lastTradeDate)}` : ""}</span>
+    </button>
+  `).join("");
+  el.stockLabSuggestions.querySelectorAll("button[data-stock-lab-symbol]").forEach((button) => {
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      el.stockLabSymbolInput.value = button.dataset.stockLabSymbol;
+      hideStockLabSuggestions();
+      runStockLab();
+    });
+  });
+}
+
+function hideStockLabSuggestions() {
+  state.stockLabSuggestions = [];
+  el.stockLabSuggestions.hidden = true;
+  el.stockLabSuggestions.innerHTML = "";
+}
+
+function parseStockSymbolInput(value) {
+  return String(value || "").trim().split(/\s|-/)[0].toUpperCase();
 }
 
 async function backtestDraftRule(index) {

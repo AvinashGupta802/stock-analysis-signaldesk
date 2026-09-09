@@ -573,6 +573,43 @@ input[type="search"] {
   color: var(--ink);
 }
 
+.stock-suggestions {
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 14px 36px rgba(21, 35, 26, 0.12);
+}
+
+.stock-suggestions button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+
+.stock-suggestions button:hover {
+  background: #f4f8f1;
+}
+
+.stock-suggestions strong {
+  font-size: 13px;
+}
+
+.stock-suggestions span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 .inline-toggle {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
