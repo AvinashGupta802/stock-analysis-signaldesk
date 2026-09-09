@@ -22,6 +22,7 @@
           <button class="view-tab" type="button" data-view-button="stockgroups">Stock Groups</button>
           <button class="view-tab" type="button" data-view-button="rules">Create Rules</button>
           <button class="view-tab" type="button" data-view-button="groups">Rule Groups</button>
+          <button class="view-tab" type="button" data-view-button="stocklab">Stock Lab</button>
         </nav>
 
         <section class="panel compact" data-view-section="analyze">
@@ -141,6 +142,30 @@
           <button id="backtestButton" type="button">Backtest selection</button>
           <p id="statusText" class="helper-text">Connecting to SQLite...</p>
         </section>
+
+        <section class="panel compact" data-view-section="stocklab">
+          <label for="stockLabSymbolInput">Stock symbol</label>
+          <input id="stockLabSymbolInput" type="search" placeholder="Example: ARIES" autocomplete="off" />
+          <div class="input-grid two-col">
+            <label>From
+              <input id="stockLabFromDateInput" type="date" />
+            </label>
+            <label>To
+              <input id="stockLabToDateInput" type="date" />
+            </label>
+            <label>Target %
+              <input id="stockLabTargetInput" type="number" min="0" step="0.5" value="10" />
+            </label>
+            <label>Stop %
+              <input id="stockLabStopInput" type="number" min="0" step="0.5" value="7" />
+            </label>
+            <label>Hold days
+              <input id="stockLabHoldInput" type="number" min="1" max="30" step="1" value="5" />
+            </label>
+          </div>
+          <button id="stockLabButton" type="button">Run Stock Lab</button>
+          <p id="stockLabStatus" class="helper-text">Enter a stock to see which system rules caught it historically.</p>
+        </section>
       </aside>
 
       <section class="workspace">
@@ -157,7 +182,7 @@
 
         <section class="metrics-grid" id="metricsGrid"></section>
 
-        <section class="content-grid">
+        <section class="content-grid" id="analysisWorkspace">
           <div class="recommendations">
             <div class="section-title">
               <h2>Stocks Passing Selection</h2>
@@ -204,9 +229,45 @@
             <div id="details" class="stock-details"></div>
           </aside>
         </section>
+
+        <section class="stock-lab-workspace" id="stockLabWorkspace" hidden>
+          <div class="recommendations">
+            <div class="section-title">
+              <h2 id="stockLabTitle">Stock Lab</h2>
+              <span id="stockLabMeta"></span>
+            </div>
+            <div id="stockLabSummary" class="backtest-summary"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Close</th>
+                    <th>Rules</th>
+                    <th>Groups</th>
+                    <th>2D</th>
+                    <th>5D</th>
+                    <th>10D</th>
+                    <th>15D</th>
+                    <th>Trade</th>
+                    <th>Key Metrics</th>
+                  </tr>
+                </thead>
+                <tbody id="stockLabBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside class="details-panel">
+            <div class="section-title">
+              <h2>Best Fit Groups</h2>
+            </div>
+            <div id="stockLabBestGroups" class="stock-details"></div>
+          </aside>
+        </section>
       </section>
     </main>
 
-    <script src="./app.js?v=builder-31"></script>
+    <script src="./app.js?v=builder-32"></script>
   </body>
 </html>

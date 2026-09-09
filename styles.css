@@ -668,3 +668,45 @@ input[type="search"] {
 .backtest-summary:empty {
   display: none;
 }
+
+.stock-lab-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 18px;
+  min-height: 0;
+}
+
+.signal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: 360px;
+}
+
+.signal-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fbfdf9;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.stock-lab-workspace table {
+  min-width: 1040px;
+}
+
+.stock-lab-workspace tbody tr {
+  cursor: default;
+}
+
+@media (max-width: 1050px) {
+  .stock-lab-workspace {
+    grid-template-columns: 1fr;
+  }
+}

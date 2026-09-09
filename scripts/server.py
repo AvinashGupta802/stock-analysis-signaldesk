@@ -412,6 +412,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(run_eod_analysis(payload))
             except Exception as exc:
                 return self.send_json({"error": str(exc)}, 500)
+        if parsed.path == "/api/stock-lab":
+            try:
+                return self.send_json(get_stock_lab(payload))
+            except Exception as exc:
+                return self.send_json({"error": str(exc)}, 500)
         return self.send_json({"error": "Not found"}, 404)
 
     def read_payload(self):
@@ -555,6 +560,121 @@ def get_rule_group_results(payload):
         "total": len(rows),
         "results": rows[:limit],
         "metrics": build_scan_metrics(rows),
+    }
+
+
+def get_stock_lab(payload):
+    symbol = str(payload.get("symbol") or "").strip().upper()
+    if not symbol:
+        return {"error": "Enter a stock symbol."}
+    from_date = payload.get("fromDate") or "2026-06-01"
+    to_date = payload.get("toDate") or latest_trade_date()
+    target_pct = float(payload.get("targetPct") or 10)
+    stop_pct = float(payload.get("stopPct") or 7)
+    max_hold_days = int(payload.get("maxHoldDays") or 5)
+    with connect() as conn:
+        ensure_strategy_schema(conn)
+        stock = conn.execute(
+            """
+            SELECT id, symbol, COALESCE(name, symbol) AS name
+            FROM instruments
+            WHERE exchange = 'NSE' AND symbol = ?
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
+        if not stock:
+            return {"error": f"{symbol} was not found in NSE data."}
+        strategy = load_strategy(conn)
+        rules = [rule for rule in strategy.get("rules", []) if rule.get("filters")]
+        groups = [group for group in strategy.get("ruleGroups", []) if group.get("ruleIds")]
+        rows = load_rows(conn, stock["id"])
+    if len(rows) < 30:
+        return {"error": f"{symbol} does not have enough history for Stock Lab."}
+    indicators = build_indicators(rows)
+    events = []
+    group_picks = {group["id"]: defaultdict(list) for group in groups}
+    rows_by_symbol = {symbol: rows}
+    max_forward = max(15, max_hold_days)
+    for index in range(21, len(rows) - 1):
+        row = rows[index]
+        if row["trade_date"] < from_date or row["trade_date"] > to_date:
+            continue
+        ctx = build_backtest_context(rows, indicators, index)
+        matched_rules = []
+        for rule in rules:
+            passed, reasons = apply_rule(ctx, rule)
+            if passed:
+                matched_rules.append(
+                    {
+                        "id": rule["id"],
+                        "name": rule["name"],
+                        "version": rule.get("version", 1),
+                        "reasons": reasons,
+                    }
+                )
+        matched_rule_ids = {rule["id"] for rule in matched_rules}
+        matched_groups = []
+        for group in groups:
+            rule_ids = [rule_id for rule_id in group.get("ruleIds", []) if rule_id in {rule["id"] for rule in rules}]
+            group_rule_matches = [rule_id for rule_id in rule_ids if rule_id in matched_rule_ids]
+            min_matches = max(1, min(int(group.get("minMatches") or 1), len(rule_ids) or 1))
+            if len(group_rule_matches) >= min_matches:
+                matched_groups.append(
+                    {
+                        "id": group["id"],
+                        "name": group["name"],
+                        "matchCount": len(group_rule_matches),
+                        "totalRules": len(rule_ids),
+                        "minMatches": min_matches,
+                    }
+                )
+                group_picks[group["id"]][row["trade_date"]].append(
+                    {
+                        "symbol": symbol,
+                        "index": index,
+                        "volume": row["volume"],
+                        "close": row["close"],
+                        "matchCount": len(group_rule_matches),
+                    }
+                )
+        if not matched_rules and not matched_groups:
+            continue
+        events.append(
+            {
+                "date": row["trade_date"],
+                "close": row["close"],
+                "volume": row["volume"],
+                "deliveryPct": ctx["delivery_pct"],
+                "relativeVolume": ctx["relative_volume"],
+                "relativeDelivery": ctx["relative_delivery"],
+                "momentum3D": ctx["momentum_3d"],
+                "momentum15D": ctx["momentum_15d"],
+                "rangePosition52W": ctx["range_position_52w"],
+                "rsi14": ctx["rsi14"],
+                "mfi14": ctx["mfi14"],
+                "cci14": ctx["cci14"],
+                "atrPct": ctx["atr_pct"],
+                "forwardReturns": forward_returns(rows, index, [2, 5, 10, 15]),
+                "tradeOutcome": simulate_single_trade(rows, index, target_pct, stop_pct, max_hold_days),
+                "matchedRules": matched_rules,
+                "matchedGroups": matched_groups,
+            }
+        )
+    best_groups = summarize_stock_group_results(groups, group_picks, rows_by_symbol, target_pct, stop_pct, max_hold_days)
+    latest = latest_stock_snapshot(rows, indicators)
+    return {
+        "symbol": stock["symbol"],
+        "name": stock["name"],
+        "fromDate": from_date,
+        "toDate": to_date,
+        "targetPct": target_pct,
+        "stopPct": stop_pct,
+        "maxHoldDays": max_hold_days,
+        "events": list(reversed(events))[:120],
+        "totalEvents": len(events),
+        "bestGroups": best_groups[:12],
+        "latest": latest,
     }
 
 
@@ -1361,6 +1481,94 @@ def build_scan_metrics(rows):
         "avgNextDayMove": avg([row["nextDayReturn"] for row in completed]),
         "nextDayPositiveRate": avg([1 if row["nextDayReturn"] > 0 else 0 for row in completed]) * 100,
         "pendingOutcomes": len(rows) - len(completed),
+    }
+
+
+def forward_returns(rows, index, horizons):
+    returns = {}
+    close = rows[index]["close"]
+    for horizon in horizons:
+        future_index = index + horizon
+        key = f"{horizon}D"
+        returns[key] = pct(rows[future_index]["close"], close) if future_index < len(rows) else None
+    return returns
+
+
+def simulate_single_trade(rows, signal_index, target_pct, stop_pct, max_hold_days):
+    entry_index = signal_index + 1
+    if entry_index >= len(rows):
+        return None
+    entry_row = rows[entry_index]
+    entry_price = entry_row["open"] or entry_row["close"]
+    target_price = entry_price * (1 + target_pct / 100)
+    stop_price = entry_price * (1 - stop_pct / 100)
+    exit_row = rows[min(entry_index + max_hold_days, len(rows) - 1)]
+    exit_price = exit_row["close"]
+    exit_reason = "time"
+    for hold_index in range(entry_index, min(entry_index + max_hold_days, len(rows) - 1) + 1):
+        day = rows[hold_index]
+        if day["low"] <= stop_price:
+            exit_row = day
+            exit_price = stop_price
+            exit_reason = "stop"
+            break
+        if day["high"] >= target_price:
+            exit_row = day
+            exit_price = target_price
+            exit_reason = "target"
+            break
+    return {
+        "entryDate": entry_row["trade_date"],
+        "exitDate": exit_row["trade_date"],
+        "entryPrice": entry_price,
+        "exitPrice": exit_price,
+        "exitReason": exit_reason,
+        "returnPct": pct(exit_price, entry_price),
+    }
+
+
+def summarize_stock_group_results(groups, group_picks, rows_by_symbol, target_pct, stop_pct, max_hold_days):
+    summaries = []
+    for group in groups:
+        picks = group_picks.get(group["id"]) or {}
+        trades = simulate_trades(picks, rows_by_symbol, 1, 10_000, target_pct, stop_pct, max_hold_days)
+        summary = summarize_trades(trades, 10_000)
+        if summary["trades"] < 3:
+            continue
+        summaries.append(
+            {
+                "id": group["id"],
+                "name": group["name"],
+                "description": group.get("description", ""),
+                "signals": sum(len(items) for items in picks.values()),
+                "signalDays": len(picks),
+                **summary,
+            }
+        )
+    summaries.sort(key=lambda item: (item["returnOnTurnoverPct"], item["winRatePct"], item["trades"]), reverse=True)
+    return summaries
+
+
+def latest_stock_snapshot(rows, indicators):
+    index = len(rows) - 1
+    ctx = build_backtest_context(rows, indicators, index)
+    return {
+        "date": ctx["date"],
+        "close": ctx["close"],
+        "volume": ctx["volume"],
+        "deliveryPct": ctx["delivery_pct"],
+        "relativeVolume": ctx["relative_volume"],
+        "relativeDelivery": ctx["relative_delivery"],
+        "momentum3D": ctx["momentum_3d"],
+        "momentum15D": ctx["momentum_15d"],
+        "momentum1M": ctx["momentum_1m"],
+        "momentum3M": ctx["momentum_3m"],
+        "momentum6M": ctx["momentum_6m"],
+        "rangePosition52W": ctx["range_position_52w"],
+        "rsi14": ctx["rsi14"],
+        "mfi14": ctx["mfi14"],
+        "cci14": ctx["cci14"],
+        "atrPct": ctx["atr_pct"],
     }
 
 

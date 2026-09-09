@@ -117,6 +117,7 @@ const state = {
   metrics: {},
   prices: [],
   selectedSymbol: null,
+  stockLab: null,
   backtest: null,
   defaultBacktest: null,
   strategySaveTimer: null,
@@ -163,6 +164,21 @@ const el = {
   stopInput: document.querySelector("#stopInput"),
   maxHoldInput: document.querySelector("#maxHoldInput"),
   backtestButton: document.querySelector("#backtestButton"),
+  stockLabSymbolInput: document.querySelector("#stockLabSymbolInput"),
+  stockLabFromDateInput: document.querySelector("#stockLabFromDateInput"),
+  stockLabToDateInput: document.querySelector("#stockLabToDateInput"),
+  stockLabTargetInput: document.querySelector("#stockLabTargetInput"),
+  stockLabStopInput: document.querySelector("#stockLabStopInput"),
+  stockLabHoldInput: document.querySelector("#stockLabHoldInput"),
+  stockLabButton: document.querySelector("#stockLabButton"),
+  stockLabStatus: document.querySelector("#stockLabStatus"),
+  analysisWorkspace: document.querySelector("#analysisWorkspace"),
+  stockLabWorkspace: document.querySelector("#stockLabWorkspace"),
+  stockLabTitle: document.querySelector("#stockLabTitle"),
+  stockLabMeta: document.querySelector("#stockLabMeta"),
+  stockLabSummary: document.querySelector("#stockLabSummary"),
+  stockLabBody: document.querySelector("#stockLabBody"),
+  stockLabBestGroups: document.querySelector("#stockLabBestGroups"),
   statusText: document.querySelector("#statusText"),
   pageTitle: document.querySelector("#pageTitle"),
   metricsGrid: document.querySelector("#metricsGrid"),
@@ -324,6 +340,10 @@ function bindShell() {
     runScan();
   }, 250));
   el.backtestButton.addEventListener("click", runBacktest);
+  el.stockLabButton.addEventListener("click", runStockLab);
+  el.stockLabSymbolInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") runStockLab();
+  });
 }
 
 function renderAll() {
@@ -339,10 +359,12 @@ function renderAll() {
   renderRuleMeaning();
   renderStatus();
   renderBacktestControls();
+  renderStockLabControls();
   renderMetrics();
   renderTable();
   renderDetails();
   renderBacktest();
+  renderStockLab();
 }
 
 function renderView() {
@@ -352,6 +374,10 @@ function renderView() {
   el.viewSections.forEach((section) => {
     section.hidden = section.dataset.viewSection !== state.view;
   });
+  const showingStockLab = state.view === "stocklab";
+  el.metricsGrid.hidden = showingStockLab;
+  el.analysisWorkspace.hidden = showingStockLab;
+  el.stockLabWorkspace.hidden = !showingStockLab;
 }
 
 function renderAnalysisSelectors() {
@@ -551,6 +577,14 @@ function renderBacktestControls() {
   if (!el.maxHoldInput.value) el.maxHoldInput.value = state.defaultBacktest.maxHoldDays || 5;
 }
 
+function renderStockLabControls() {
+  if (!el.stockLabFromDateInput.value) el.stockLabFromDateInput.value = state.defaultBacktest.fromDate || state.dates[0] || "";
+  if (!el.stockLabToDateInput.value) el.stockLabToDateInput.value = state.defaultBacktest.toDate || state.dates[state.dates.length - 1] || "";
+  if (!el.stockLabTargetInput.value) el.stockLabTargetInput.value = 10;
+  if (!el.stockLabStopInput.value) el.stockLabStopInput.value = 7;
+  if (!el.stockLabHoldInput.value) el.stockLabHoldInput.value = 5;
+}
+
 function renderMetrics() {
   const rows = [
     ["Passed stocks", state.metrics.passedStocks ?? 0],
@@ -559,6 +593,65 @@ function renderMetrics() {
     ["Pending", state.metrics.pendingOutcomes ?? 0],
   ];
   el.metricsGrid.innerHTML = rows.map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
+}
+
+function renderStockLab() {
+  if (state.view === "stocklab") {
+    el.pageTitle.textContent = state.stockLab ? `${state.stockLab.symbol} Stock Lab` : "Stock Lab";
+  }
+  if (!state.stockLab) {
+    el.stockLabTitle.textContent = "Stock Lab";
+    el.stockLabMeta.textContent = "";
+    el.stockLabSummary.innerHTML = "";
+    el.stockLabBody.innerHTML = `<tr><td colspan="10" class="empty-state">Enter a stock symbol and run Stock Lab.</td></tr>`;
+    el.stockLabBestGroups.innerHTML = `<div class="empty-state">Best-fit groups will appear after the stock is analyzed.</div>`;
+    return;
+  }
+  const lab = state.stockLab;
+  const latest = lab.latest || {};
+  el.stockLabTitle.textContent = `${lab.symbol} - ${lab.name}`;
+  el.stockLabMeta.textContent = `${formatDate(lab.fromDate)} to ${formatDate(lab.toDate)} - ${formatNumber(lab.totalEvents)} signal dates`;
+  el.stockLabSummary.innerHTML = `
+    <div class="detail-block">
+      <h3>Latest Snapshot</h3>
+      <p>${formatDate(latest.date)} close Rs. ${formatMoney(latest.close || 0)}, volume ${formatNumber(latest.volume || 0)}, delivery ${latest.deliveryPct == null ? "N/A" : formatPlainPct(latest.deliveryPct)}.</p>
+      <p>3D ${formatPct(latest.momentum3D || 0)}, 15D ${formatPct(latest.momentum15D || 0)}, 1M ${formatPct(latest.momentum1M || 0)}, 3M ${formatPct(latest.momentum3M || 0)}, 6M ${formatPct(latest.momentum6M || 0)}.</p>
+    </div>
+  `;
+  if (!lab.events.length) {
+    el.stockLabBody.innerHTML = `<tr><td colspan="10" class="empty-state">No system rules fired for this stock in the selected date range.</td></tr>`;
+  } else {
+    el.stockLabBody.innerHTML = lab.events.map((event) => {
+      const outcome = event.tradeOutcome;
+      const groups = event.matchedGroups || [];
+      return `
+        <tr>
+          <td>${formatDate(event.date)}</td>
+          <td>Rs. ${formatMoney(event.close)}</td>
+          <td>${chipList((event.matchedRules || []).map((rule) => rule.name), 4)}</td>
+          <td>${chipList(groups.map((group) => group.name), 3)}</td>
+          <td class="${pctClass(event.forwardReturns?.["2D"])}">${formatOptionalPct(event.forwardReturns?.["2D"])}</td>
+          <td class="${pctClass(event.forwardReturns?.["5D"])}">${formatOptionalPct(event.forwardReturns?.["5D"])}</td>
+          <td class="${pctClass(event.forwardReturns?.["10D"])}">${formatOptionalPct(event.forwardReturns?.["10D"])}</td>
+          <td class="${pctClass(event.forwardReturns?.["15D"])}">${formatOptionalPct(event.forwardReturns?.["15D"])}</td>
+          <td class="${pctClass(outcome?.returnPct)}">${outcome ? `${formatPct(outcome.returnPct)} ${escapeHtml(outcome.exitReason)}` : "Pending"}</td>
+          <td>
+            Vol ${Number(event.relativeVolume || 0).toFixed(2)}x,
+            Del ${event.deliveryPct == null ? "N/A" : formatPlainPct(event.deliveryPct)},
+            RSI ${Number(event.rsi14 || 0).toFixed(1)}
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+  el.stockLabBestGroups.innerHTML = lab.bestGroups.length ? lab.bestGroups.map((group) => `
+    <div class="detail-block">
+      <h3>${escapeHtml(group.name)}</h3>
+      <p>${formatNumber(group.trades)} historical signals, P/L Rs. ${formatMoney(group.netPnl)}, return ${formatPct(group.returnOnTurnoverPct)}.</p>
+      <p>Win ${formatPct(group.winRatePct)}, target ${formatPct(group.targetHitPct)}, stop ${formatPct(group.stopHitPct)}.</p>
+      ${group.description ? `<p class="muted">${escapeHtml(group.description)}</p>` : ""}
+    </div>
+  `).join("") : `<div class="empty-state">No rule group has enough matching history for this stock.</div>`;
 }
 
 function renderTable() {
@@ -733,6 +826,38 @@ async function runBacktest() {
   } finally {
     el.backtestButton.disabled = false;
     el.backtestButton.textContent = "Backtest selection";
+  }
+}
+
+async function runStockLab() {
+  const symbol = el.stockLabSymbolInput.value.trim().toUpperCase();
+  if (!symbol) {
+    el.stockLabStatus.textContent = "Enter a stock symbol first.";
+    return;
+  }
+  el.stockLabButton.disabled = true;
+  el.stockLabButton.textContent = "Analyzing...";
+  el.stockLabStatus.textContent = `Analyzing ${symbol} across system rules...`;
+  try {
+    const result = await postJson("/api/stock-lab", {
+      symbol,
+      fromDate: el.stockLabFromDateInput.value || state.defaultBacktest.fromDate,
+      toDate: el.stockLabToDateInput.value || state.defaultBacktest.toDate,
+      targetPct: Number(el.stockLabTargetInput.value) || 10,
+      stopPct: Number(el.stockLabStopInput.value) || 7,
+      maxHoldDays: Number(el.stockLabHoldInput.value) || 5,
+    });
+    if (result.error) throw new Error(result.error);
+    state.stockLab = result;
+    el.stockLabStatus.textContent = `${result.symbol}: ${formatNumber(result.totalEvents)} signal dates found.`;
+    renderStockLab();
+  } catch (error) {
+    state.stockLab = null;
+    el.stockLabStatus.textContent = error.message;
+    renderStockLab();
+  } finally {
+    el.stockLabButton.disabled = false;
+    el.stockLabButton.textContent = "Run Stock Lab";
   }
 }
 
@@ -1538,6 +1663,27 @@ function formatNumber(value) {
 
 function formatPct(value) {
   return `${value > 0 ? "+" : ""}${Number(value).toFixed(2)}%`;
+}
+
+function formatOptionalPct(value) {
+  return value == null ? "Pending" : formatPct(value);
+}
+
+function pctClass(value) {
+  if (value == null) return "neutral";
+  return value > 0 ? "positive" : value < 0 ? "negative" : "neutral";
+}
+
+function chipList(items, limit = 4) {
+  if (!items.length) return "-";
+  const shown = items.slice(0, limit);
+  const extra = items.length - shown.length;
+  return `
+    <div class="signal-chips">
+      ${shown.map((item) => `<span class="signal-chip">${escapeHtml(item)}</span>`).join("")}
+      ${extra > 0 ? `<span class="signal-chip">+${extra}</span>` : ""}
+    </div>
+  `;
 }
 
 function formatPlainPct(value) {
