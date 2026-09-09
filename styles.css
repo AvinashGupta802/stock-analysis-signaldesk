@@ -671,9 +671,13 @@ input[type="search"] {
 
 .stock-lab-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   min-height: 0;
+}
+
+.stock-lab-workspace .recommendations {
+  overflow: hidden;
 }
 
 .signal-chips {
@@ -697,12 +701,37 @@ input[type="search"] {
   white-space: nowrap;
 }
 
+.stock-lab-workspace .table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 68vh;
+  overflow: auto;
+}
+
 .stock-lab-workspace table {
-  min-width: 1040px;
+  min-width: 1180px;
 }
 
 .stock-lab-workspace tbody tr {
   cursor: default;
+}
+
+.stock-lab-workspace thead th {
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.stock-lab-insights {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.stock-lab-insight-section {
+  min-width: 0;
 }
 
 .section-title.stacked {
@@ -735,7 +764,8 @@ input[type="search"] {
 }
 
 @media (max-width: 1050px) {
-  .stock-lab-workspace {
+  .stock-lab-workspace,
+  .stock-lab-insights {
     grid-template-columns: 1fr;
   }
 }
