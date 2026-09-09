@@ -676,9 +676,12 @@ function renderStockLabDraftRules(lab) {
       <ul>
         ${(draft.rule?.filters || []).map((filter) => `<li><strong>${escapeHtml(filterDefinition(filter.id)?.name || filter.id)}:</strong> ${escapeHtml(humanValues(filter))}</li>`).join("")}
       </ul>
+      ${draft.stockBacktest ? `
+        <p><strong>On this stock:</strong> ${formatNumber(draft.stockBacktest.trades)} trades, P/L Rs. ${formatMoney(draft.stockBacktest.netPnl)}, return ${formatPct(draft.stockBacktest.returnOnTurnoverPct)}, win ${formatPct(draft.stockBacktest.winRatePct)}.</p>
+      ` : ""}
       <p class="muted">Evidence dates: ${(draft.evidenceDates || []).map((item) => `${formatDate(item.date)} (${formatOptionalPct(item.forwardReturnPct)})`).join(", ") || "N/A"}</p>
       ${draft.backtest ? `
-        <p><strong>${formatNumber(draft.backtest.trades)}</strong> trades, P/L Rs. ${formatMoney(draft.backtest.netPnl)}, return ${formatPct(draft.backtest.returnOnTurnoverPct)}, win ${formatPct(draft.backtest.winRatePct)}.</p>
+        <p><strong>Selected group:</strong> ${formatNumber(draft.backtest.trades)} trades, P/L Rs. ${formatMoney(draft.backtest.netPnl)}, return ${formatPct(draft.backtest.returnOnTurnoverPct)}, win ${formatPct(draft.backtest.winRatePct)}.</p>
       ` : ""}
       <div class="draft-actions">
         <button type="button" data-backtest-draft="${index}">Backtest Draft</button>

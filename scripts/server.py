@@ -884,6 +884,33 @@ def suggest_stock_draft_rules(symbol, contexts, target_pct):
     return drafts
 
 
+def add_stock_backtests_to_drafts(drafts, contexts, rows, target_pct, stop_pct, max_hold_days):
+    rows_by_symbol = {contexts[0]["symbol"]: rows} if contexts else {}
+    for draft in drafts:
+        rule = normalize_rule(draft["rule"])
+        picks_by_date = defaultdict(list)
+        for item in contexts:
+            passed, reasons = apply_rule(item["context"], rule)
+            if not passed:
+                continue
+            picks_by_date[item["date"]].append(
+                {
+                    "symbol": item["symbol"],
+                    "index": item["index"],
+                    "volume": item["volume"],
+                    "close": item["close"],
+                    "reasons": reasons,
+                }
+            )
+        trades = simulate_trades(picks_by_date, rows_by_symbol, 1, 10_000, target_pct, stop_pct, max_hold_days)
+        draft["stockBacktest"] = {
+            "totalSignals": sum(len(items) for items in picks_by_date.values()),
+            "signalDays": len(picks_by_date),
+            **summarize_trades(trades, 10_000),
+        }
+    return drafts
+
+
 def get_stock_lab(payload):
     symbol = str(payload.get("symbol") or "").strip().upper()
     if not symbol:
@@ -925,6 +952,9 @@ def get_stock_lab(payload):
         forward = forward_returns(rows, index, [2, 5, 10, 15])
         outcome = simulate_single_trade(rows, index, target_pct, stop_pct, max_hold_days)
         lab_context = {
+            "symbol": stock["symbol"],
+            "index": index,
+            "context": ctx,
             "date": row["trade_date"],
             "close": row["close"],
             "volume": row["volume"],
@@ -989,12 +1019,14 @@ def get_stock_lab(payload):
                 )
         if not matched_rules and not matched_groups:
             continue
-        event = dict(lab_context)
+        event = {key: value for key, value in lab_context.items() if key not in {"context", "index", "symbol"}}
         event["matchedRules"] = matched_rules
         event["matchedGroups"] = matched_groups
         events.append(event)
     best_groups = summarize_stock_group_results(groups, group_picks, rows_by_symbol, target_pct, stop_pct, max_hold_days)
     latest = latest_stock_snapshot(rows, indicators)
+    draft_rules = suggest_stock_draft_rules(stock["symbol"], suggestion_contexts, target_pct)
+    draft_rules = add_stock_backtests_to_drafts(draft_rules, suggestion_contexts, rows, target_pct, stop_pct, max_hold_days)
     return {
         "symbol": stock["symbol"],
         "name": stock["name"],
@@ -1007,7 +1039,7 @@ def get_stock_lab(payload):
         "totalEvents": len(events),
         "bestGroups": best_groups[:12],
         "latest": latest,
-        "draftRules": suggest_stock_draft_rules(stock["symbol"], suggestion_contexts, target_pct),
+        "draftRules": draft_rules,
     }
 
 
