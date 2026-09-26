@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from server import normalize_group_scoring, score_group_agreement
+from strategy_scoring import normalize_group_scoring, score_group_agreement
 
 
 class WeightedGroupScoringTests(unittest.TestCase):

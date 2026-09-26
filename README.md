@@ -1,162 +1,129 @@
-﻿# SignalDesk India
+# SignalDesk India
 
-First-cut prototype for an Indian stock EOD recommendation app.
+SignalDesk is an NSE end-of-day research application for finding and testing short-term swing-trading setups. It combines editable technical filters into rules, combines rules into weighted rule groups, stores daily analysis in SQLite, and provides a Stock Lab for examining one symbol over time.
 
-## What It Does
+This is a research tool, not financial advice. Backtest results do not include every real-world cost or guarantee future returns.
 
-- Creates predefined stock groups such as Nifty Core, Banking Leaders, and IT Services.
-- Imports per-stock EOD CSV/XLSX files in BSE-style and Yahoo-style historical formats.
-- Runs a weighted rule engine on EOD candle data.
-- Produces Buy, Sell, Watch, Strong Buy, and Strong Sell signals.
-- Shows next-day result for quick backdated validation.
-- Persists imported data in browser localStorage for MVP testing.
+## Current Scope
 
-## Open The Prototype
+- NSE cash-market EOD price, volume, and delivery data
+- Typical holding periods from 2 to 15 trading days
+- User-defined stock groups and combined groups
+- Editable filters, rules, rule groups, and per-rule weights
+- Stored EOD analysis with on-demand calculation when inputs change
+- Rule and rule-group backtests
+- Stock Lab history, best-fit groups, draft-rule suggestions, and draft backtests
 
-Open `index.html` in a browser.
+## Run Locally
 
-## Importing Data
-
-Use the **Import EOD data** control in the sidebar.
-
-Supported MVP formats:
-
-- `Date`
-- `Open`
-- `High`
-- `Low`
-- `Close`
-- `WAP`
-- `No. of Shares`
-- `No. of Trades`
-- `Total Turnover`
-- `Deliverable Quantity`
-- `% Deli. Qty to Traded Qty`
-
-Yahoo-style history:
-
-- `Date`
-- `Open`
-- `High`
-- `Low`
-- `Close`
-- `Volume`
-- `Dividends`
-- `Stock Splits`
-
-The importer detects the stock symbol from the file name. For example:
-
-```text
-ARIES_BSE_Historical_01012022_to_22082026.xlsx -> ARIES
-RELIANCE_NSE.csv -> RELIANCE
-ARIES.NS.csv -> ARIES
-```
-
-CSV files work fully offline. XLSX import uses the SheetJS browser parser loaded from CDN, so the browser needs internet access once for that library. If XLSX does not load, save the same file as CSV and import it.
-
-## Current Storage
-
-Imported data is stored in browser `localStorage`. This is fine for a few stocks while testing the workflow. Do not import thousands of files into localStorage; the `share_history/v1` folder should be loaded through the next SQLite backend importer. For many stocks or long histories, the next step should be IndexedDB locally, then SQLite/PostgreSQL for a hosted app.
-
-
-
-## Run The SQLite-Connected App
-
-Start the local backend server:
+Requirements: Python 3.10 or newer and a modern browser. The application currently uses only Python standard-library modules at runtime.
 
 ```powershell
 python scripts\server.py
 ```
 
-Then open:
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Keep the terminal open while using the application.
+
+The application database is `data/stock_analysis_exchange.sqlite3`. SQLite runs as an embedded file, so PostgreSQL or another database server is not required.
+
+## Data Import
+
+Import NSE prices and delivery data for one trading date:
+
+```powershell
+python scripts\import_exchange_bhavcopy.py --exchange NSE --dataset both --date 2026-09-25
+```
+
+Import a date range:
+
+```powershell
+python scripts\import_exchange_bhavcopy.py --exchange NSE --dataset both --start-date 2026-09-01 --end-date 2026-09-25
+```
+
+The importer skips weekends and unavailable exchange files. Use `--no-download` to reprocess files already present under `data/raw`. Exchange formats and URLs can change, so verify row counts and the latest date after an import.
+
+## EOD Workflow
+
+After importing a trading day, evaluate every active saved rule and rule group and persist the results:
+
+```powershell
+python scripts\run_eod_analysis.py --date 2026-09-25
+```
+
+Omit `--date` to analyze the latest NSE date in SQLite. The UI reuses stored results when the stock group, rule definitions, weights, thresholds, and signal date match. A changed input is calculated on demand so stale results are not presented as current.
+
+## Strategy Model
+
+A **filter** is one measurable condition, such as RSI range, volume versus its 20-day average, delivery percentage, momentum, MACD, EMA trend, or ATR risk.
+
+A **rule** is an AND combination of filters. A stock passes the rule only when it passes every filter in that rule.
+
+A **rule group** combines rules. It can require both:
+
+- a minimum number of matching rules; and
+- a minimum weighted score.
+
+The score is:
 
 ```text
-http://127.0.0.1:8000
+matched rule weight / total group rule weight * 100
 ```
 
-The browser UI now reads recommendations from `data/stock_analysis.sqlite3` through these local API endpoints:
+Rule weights are bounded from `0.25` to `3.0`. Equal weights preserve the original count-based behavior. The minimum rule count remains a hard guard, so one heavily weighted rule cannot pass a group that requires two matches.
 
-- `/api/bootstrap`
-- `/api/recommendations`
-- `/api/prices`
+Price range is a universe-level filter. It can be applied to a run independently instead of being duplicated inside every technical rule.
 
-If you open `index.html` directly without the server, the UI falls back to small demo data.
+## Backtesting
 
-## BSE EOD Bhavcopy Download
-
-Download and import a single BSE EOD bhavcopy date:
+Run the saved-strategy deep audit without changing strategy definitions in SQLite:
 
 ```powershell
-python scripts\download_bse_bhavcopy.py --date 2026-08-21 --db data\stock_analysis.sqlite3
+python scripts\deep_audit_saved_strategy.py --from-date 2026-06-01 --to-date 2026-09-25 --universes all,liquid,nifty500 --hold-days 2,3,5,7,10,15 --top-n 3,5,10 --exits 5:5,8:6,10:7,12:8,15:10
 ```
 
-Download and import a date range:
+Reports are written to `outputs`. Use out-of-sample dates when comparing strategies, and consider brokerage, taxes, slippage, liquidity, survivorship bias, overlapping positions, and available capital before interpreting returns.
+
+## Main API
+
+The browser uses these local endpoints:
+
+- `GET /api/bootstrap` - strategy catalog, groups, dates, and application state
+- `GET /api/prices` - chart history
+- `GET /api/stocks/search` - symbol lookup for Stock Lab
+- `POST /api/rule/results` - one rule on a selected universe and date
+- `POST /api/rule-group/results` - weighted group results, stored when compatible
+- `POST /api/rule/backtest` - rule backtest
+- `POST /api/rule-group/backtest` - group backtest
+- `POST /api/groups` and `/api/groups/combine` - custom stock groups
+- `POST /api/strategy` - save rules and groups
+- `POST /api/eod-analysis` - run and store analysis
+- `POST /api/stock-lab` - single-stock research workflow
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) before extending the backend or database schema.
+
+## Verification
+
+Run the focused automated checks:
 
 ```powershell
-python scripts\download_bse_bhavcopy.py --start-date 2026-07-01 --end-date 2026-08-21 --db data\stock_analysis.sqlite3
+python -m unittest scripts/test_weighted_groups.py
+python -m py_compile scripts/server.py scripts/strategy_scoring.py scripts/deep_audit_saved_strategy.py
+node --check app.js
 ```
 
-The downloader tries the newer BSE CM bhavcopy CSV first, then falls back to the older `EQddmmyy_CSV.ZIP` format. Raw downloaded files are stored under `data/raw/bse_bhavcopy`.
+After backend changes, also start the server and smoke-test `/api/bootstrap`, a stored rule-group request, and the Stock Lab.
 
-For an EOD schedule, run this after BSE publishes the bhavcopy, then refresh the app at `http://127.0.0.1:8000`.
-## SQLite Import And Backtest
+## Sharing And Security
 
-Bulk historical CSV data should be imported into SQLite:
+The local server blocks direct access to database, source, and output files. However, the POST APIs do not yet have authentication or authorization. A public Cloudflare Tunnel should therefore be treated as a temporary feedback link: anyone with the URL may be able to change strategy data. Add authentication or a read-only public mode before broader deployment.
 
-```powershell
-python scripts\import_history.py --source C:\Users\Avinash\Downloads\share_history\v1 --db data\stock_analysis.sqlite3
-```
+## Repository Map
 
-Run the first EOD rule backtest:
-
-```powershell
-python scripts\backtest_eod.py --db data\stock_analysis.sqlite3 --from-date 2020-01-01 --to-date 2023-10-20 --min-price 20 --min-volume 10000 --threshold 5 --output outputs\backtest_summary.csv
-```
-
-Current imported database:
-
-- `data/stock_analysis.sqlite3`
-- 7,313 stocks
-- 6,635,647 daily price rows
-- date range from 1995-12-25 to 2026-08-21
-
-## Swing Trading Rule Selection
-
-The product is now aimed at short-term 2-5 trading day setups:
-
-- `Strong Buy` means possible long swing setup.
-- `Strong Sell` means possible short swing setup.
-
-The app has predefined selectable filters and rules in the sidebar. The backend applies the selected rule IDs through `/api/recommendations`.
-
-Current filter examples:
-
-- price >= Rs. 20 / Rs. 50
-- volume >= 100k / 500k
-- avoid >15% one-day moves
-
-Current rule examples:
-
-- Long: above 5 & 20 DMA
-- Short: below 5 & 20 DMA
-- Long/short 3-day momentum
-- Long/short volume breakout
-- Long near 20-day high
-- Short near 20-day low
-- Close near day high / low
-
-Next step: update `scripts/backtest_eod.py` to use the same selectable rule catalog and report 2-day, 3-day, and 5-day long/short outcomes.
-## Next Build Steps
-
-1. Add backend API endpoints over SQLite.
-2. Add custom stock groups built from imported symbols.
-3. Move rules into editable JSON/config.
-4. Improve backtesting with liquidity filters, benchmark comparison, and transaction-cost assumptions.
-5. Add NSE/BSE bhavcopy bulk import.
-6. Add a replaceable market data provider interface.
-
-
-
-
-
-
+- `index.html`, `styles.css`, `app.js` - browser interface
+- `scripts/server.py` - HTTP API, persistence orchestration, indicators, and analysis
+- `scripts/strategy_scoring.py` - pure weighted rule-group scoring
+- `scripts/import_exchange_bhavcopy.py` - NSE/BSE report download and import
+- `scripts/run_eod_analysis.py` - saved-strategy EOD runner
+- `scripts/deep_audit_saved_strategy.py` - long-running saved-strategy audit
+- `data/` - SQLite database and raw exchange files
+- `outputs/` - generated research reports

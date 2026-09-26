@@ -12,11 +12,10 @@ from server import (
     load_group_stocks,
     load_rows,
     load_strategy,
-    normalize_group_scoring,
-    score_group_agreement,
     simulate_trades,
     summarize_trades,
 )
+from strategy_scoring import normalize_group_scoring, score_group_agreement
 
 
 ROOT = Path(__file__).resolve().parents[1]
