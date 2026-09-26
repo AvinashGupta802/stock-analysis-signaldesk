@@ -150,6 +150,7 @@ const el = {
   ruleGroupSelect: document.querySelector("#ruleGroupSelect"),
   ruleGroupNameInput: document.querySelector("#ruleGroupNameInput"),
   minRuleMatchesInput: document.querySelector("#minRuleMatchesInput"),
+  minWeightedScoreInput: document.querySelector("#minWeightedScoreInput"),
   ruleGroupMembers: document.querySelector("#ruleGroupMembers"),
   saveRuleGroupButton: document.querySelector("#saveRuleGroupButton"),
   newRuleGroupButton: document.querySelector("#newRuleGroupButton"),
@@ -324,7 +325,9 @@ function bindShell() {
       id: createId("group"),
       name: "New Rule Group",
       minMatches: 1,
+      minWeightedScore: 100,
       ruleIds: rule ? [rule.id] : [],
+      ruleWeights: rule ? { [rule.id]: 1 } : {},
     });
     state.activeRuleGroupIndex = state.ruleGroups.length - 1;
     state.mode = "group";
@@ -431,24 +434,38 @@ function renderRuleGroupSelect() {
   el.ruleGroupNameInput.value = group.name;
   el.minRuleMatchesInput.max = Math.max(1, group.ruleIds.length);
   el.minRuleMatchesInput.value = group.minMatches || Math.max(1, group.ruleIds.length);
+  el.minWeightedScoreInput.value = group.minWeightedScore ?? defaultWeightedScore(group);
 }
 
 function renderRuleGroupMembers() {
   const group = currentRuleGroup();
   el.ruleGroupMembers.innerHTML = state.rules.map((rule) => `
-    <label class="check-item">
+    <div class="check-item weighted-rule-item">
       <input type="checkbox" data-rule-group-member="${escapeHtml(rule.id)}" ${group.ruleIds.includes(rule.id) ? "checked" : ""} />
       <span>
         <strong>${escapeHtml(rule.name)}</strong>
         <small>${escapeHtml(rule.description || `${formatNumber(signalFilters(rule).length)} signal filters`)}</small>
       </span>
-    </label>
+      <label class="rule-weight-control">Weight
+        <input type="number" data-rule-group-weight="${escapeHtml(rule.id)}" min="0.25" max="3" step="0.25" value="${group.ruleWeights?.[rule.id] ?? 1}" ${group.ruleIds.includes(rule.id) ? "" : "disabled"} />
+      </label>
+    </div>
   `).join("");
   el.ruleGroupMembers.querySelectorAll("input[data-rule-group-member]").forEach((input) => {
     input.addEventListener("change", () => {
       saveCurrentRuleGroupFromUi();
       saveRuleGroups();
       renderRuleGroupSelect();
+      renderRuleGroupMembers();
+      state.mode = "group";
+      state.backtest = null;
+      runScan();
+    });
+  });
+  el.ruleGroupMembers.querySelectorAll("input[data-rule-group-weight]").forEach((input) => {
+    input.addEventListener("change", () => {
+      saveCurrentRuleGroupFromUi();
+      saveRuleGroups();
       state.mode = "group";
       state.backtest = null;
       runScan();
@@ -539,11 +556,11 @@ function renderRuleMeaning() {
     el.ruleMeaning.innerHTML = `
       <div class="detail-block">
         <h3>Recommendation Group</h3>
-        <p>A stock appears when at least ${group.minMatches || 1} selected rules pass. More matching rules means stronger agreement.</p>
+        <p>A stock appears when at least ${group.minMatches || 1} selected rules pass and weighted confidence reaches ${formatPlainPct(group.minWeightedScore ?? defaultWeightedScore(group))}.</p>
         ${group.description ? `<p>${escapeHtml(group.description)}</p>` : ""}
         ${universeFilterSummary()}
         <ul>
-          ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)}:</strong> ${escapeHtml(item.description || `${formatNumber(signalFilters(item).length)} signal filters`)}</li>`).join("")}
+          ${selectedRules.map((item) => `<li><strong>${escapeHtml(item.name)} (${formatNumber(group.ruleWeights?.[item.id] ?? 1)}x):</strong> ${escapeHtml(item.description || `${formatNumber(signalFilters(item).length)} signal filters`)}</li>`).join("")}
         </ul>
       </div>
     `;
@@ -721,7 +738,7 @@ function renderTable() {
   el.resultsBody.innerHTML = state.results.map((item) => `
     <tr class="${item.symbol === state.selectedSymbol ? "active" : ""}" data-symbol="${escapeHtml(item.symbol)}">
       <td class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name)}</span></td>
-      <td>${item.totalRules ? `${item.matchCount}/${item.totalRules}` : "-"}</td>
+      <td>${item.totalRules ? `<strong>${item.matchCount}/${item.totalRules}</strong><span class="agreement-score">${formatPlainPct(item.weightedScore || 0)}</span>` : "-"}</td>
       <td>Rs. ${formatMoney(item.close)}</td>
       <td>${formatNumber(item.volume)}</td>
       <td>${Number(item.relativeVolume || 0).toFixed(2)}x</td>
@@ -761,8 +778,8 @@ function renderDetails() {
     ${item.totalRules ? `
       <div class="detail-block">
         <h3>Rule Group Match</h3>
-        <p>${item.matchCount} of ${item.totalRules} rules passed. Minimum required: ${item.minMatches}.</p>
-        <ul>${(item.matchedRules || []).map((rule) => `<li>${escapeHtml(rule.name)}</li>`).join("")}</ul>
+        <p>${item.matchCount} of ${item.totalRules} rules passed. Weighted confidence ${formatPlainPct(item.weightedScore || 0)}; required ${formatPlainPct(item.minWeightedScore || 0)}.</p>
+        <ul>${(item.matchedRules || []).map((rule) => `<li>${escapeHtml(rule.name)} (${formatNumber(rule.weight ?? 1)}x)</li>`).join("")}</ul>
       </div>
     ` : ""}
     <div class="detail-block">
@@ -874,6 +891,8 @@ async function runBacktest() {
     if (isGroupMode) {
       payload.rules = rulesForCurrentGroup().map(ruleForRun);
       payload.minMatches = currentRuleGroup().minMatches || 1;
+      payload.minWeightedScore = currentRuleGroup().minWeightedScore ?? defaultWeightedScore(currentRuleGroup());
+      payload.ruleWeights = currentRuleGroup().ruleWeights || {};
       state.backtest = await postJson("/api/rule-group/backtest", payload);
     } else {
       payload.rule = ruleForRun(currentRule());
@@ -1017,7 +1036,9 @@ function createDraftRule(index, alsoCreateGroup) {
         description: `User-created group from Stock Lab draft rule: ${draft.description || draft.name}`,
         kind: "user",
         minMatches: 1,
+        minWeightedScore: 100,
         ruleIds: [rule.id],
+        ruleWeights: { [rule.id]: 1 },
       });
     }
     state.activeRuleGroupIndex = state.ruleGroups.findIndex((group) => group.name === groupName);
@@ -1076,7 +1097,26 @@ function currentRule() {
 }
 
 function currentRuleGroup() {
-  return state.ruleGroups[state.activeRuleGroupIndex] || state.ruleGroups[0] || { id: "default", name: "Universal Rule Group", minMatches: 1, ruleIds: [] };
+  return state.ruleGroups[state.activeRuleGroupIndex] || state.ruleGroups[0] || { id: "default", name: "Universal Rule Group", minMatches: 1, minWeightedScore: 100, ruleIds: [], ruleWeights: {} };
+}
+
+function defaultWeightedScore(group) {
+  const ruleCount = Math.max(1, group?.ruleIds?.length || 0);
+  const minMatches = Math.max(1, Math.min(Number(group?.minMatches) || 1, ruleCount));
+  return Number(((minMatches / ruleCount) * 100).toFixed(2));
+}
+
+function cleanRuleWeights(ruleIds, rawWeights = {}) {
+  return Object.fromEntries(ruleIds.map((ruleId) => {
+    const requested = Number(rawWeights?.[ruleId]);
+    return [ruleId, Math.max(0.25, Math.min(requested || 1, 3))];
+  }));
+}
+
+function cleanWeightedScore(value, group) {
+  if (value === null || value === undefined || value === "") return defaultWeightedScore(group);
+  const requested = Number(value);
+  return Number.isFinite(requested) ? Math.max(1, Math.min(requested, 100)) : defaultWeightedScore(group);
 }
 
 function rulesForCurrentGroup() {
@@ -1097,6 +1137,8 @@ async function runRuleGroupScan(seq) {
   const payload = {
     rules: selectedRules.map(ruleForRun),
     minMatches: currentRuleGroup().minMatches || selectedRules.length,
+    minWeightedScore: currentRuleGroup().minWeightedScore ?? defaultWeightedScore(currentRuleGroup()),
+    ruleWeights: currentRuleGroup().ruleWeights || {},
     universeFilters: universeFiltersForRun(),
     group: state.groupId,
     date: state.date,
@@ -1172,8 +1214,15 @@ function saveCurrentRuleGroupFromUi() {
   const group = currentRuleGroup();
   group.name = el.ruleGroupNameInput.value.trim() || "Untitled Rule Group";
   group.ruleIds = Array.from(el.ruleGroupMembers.querySelectorAll("input[data-rule-group-member]:checked")).map((input) => input.dataset.ruleGroupMember);
+  group.ruleWeights = Object.fromEntries(group.ruleIds.map((ruleId) => {
+    const input = el.ruleGroupMembers.querySelector(`input[data-rule-group-weight="${CSS.escape(ruleId)}"]`);
+    const requestedWeight = Number(input?.value);
+    return [ruleId, Math.max(0.25, Math.min(requestedWeight || 1, 3))];
+  }));
   const requestedMatches = Number(el.minRuleMatchesInput.value) || group.ruleIds.length || 1;
   group.minMatches = Math.max(1, Math.min(requestedMatches, group.ruleIds.length || 1));
+  const requestedScore = Number(el.minWeightedScoreInput.value);
+  group.minWeightedScore = Math.max(1, Math.min(Number.isFinite(requestedScore) ? requestedScore : defaultWeightedScore(group), 100));
   state.backtest = null;
 }
 
@@ -1181,6 +1230,7 @@ function syncRuleGroupsWithRules() {
   const knownRuleIds = new Set(state.rules.map((rule) => rule.id));
   state.ruleGroups.forEach((group) => {
     group.ruleIds = group.ruleIds.filter((id) => knownRuleIds.has(id));
+    group.ruleWeights = Object.fromEntries(group.ruleIds.map((id) => [id, group.ruleWeights?.[id] ?? 1]));
   });
   if (!state.ruleGroups.length) state.ruleGroups = defaultRuleGroups();
   saveRuleGroups();
@@ -1268,13 +1318,19 @@ function loadSavedRuleGroups(serverGroups) {
   const localGroups = readLocalArray(RULE_GROUP_STORAGE_KEY);
   if (Array.isArray(serverGroups) && serverGroups.length) {
     const knownRuleIds = new Set(state.rules.map((rule) => rule.id));
-    const cleaned = serverGroups.map((group) => ({
-      id: group.id || createId("group"),
-      name: group.name || "Untitled Rule Group",
-      description: group.description || "",
-      minMatches: Number(group.minMatches) || 1,
-      ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
-    })).filter((group) => group.ruleIds.length);
+    const cleaned = serverGroups.map((group) => {
+      const ruleIds = (group.ruleIds || []).filter((id) => knownRuleIds.has(id));
+      const normalized = {
+        id: group.id || createId("group"),
+        name: group.name || "Untitled Rule Group",
+        description: group.description || "",
+        minMatches: Number(group.minMatches) || 1,
+        ruleIds,
+        ruleWeights: cleanRuleWeights(ruleIds, group.ruleWeights),
+      };
+      normalized.minWeightedScore = cleanWeightedScore(group.minWeightedScore, normalized);
+      return normalized;
+    }).filter((group) => group.ruleIds.length);
     if (cleaned.length) {
       const ids = new Set(cleaned.map((group) => group.id));
       const names = new Set(cleaned.map((group) => group.name));
@@ -1318,13 +1374,19 @@ function readLocalArray(key) {
 }
 
 function cleanRuleGroups(groups, knownRuleIds) {
-  return groups.map((group) => ({
-    id: group.id || createId("group"),
-    name: group.name || "Untitled Rule Group",
-    description: group.description || "",
-    minMatches: Number(group.minMatches) || 1,
-    ruleIds: (group.ruleIds || []).filter((id) => knownRuleIds.has(id)),
-  })).filter((group) => group.ruleIds.length);
+  return groups.map((group) => {
+    const ruleIds = (group.ruleIds || []).filter((id) => knownRuleIds.has(id));
+    const normalized = {
+      id: group.id || createId("group"),
+      name: group.name || "Untitled Rule Group",
+      description: group.description || "",
+      minMatches: Number(group.minMatches) || 1,
+      ruleIds,
+      ruleWeights: cleanRuleWeights(ruleIds, group.ruleWeights),
+    };
+    normalized.minWeightedScore = cleanWeightedScore(group.minWeightedScore, normalized);
+    return normalized;
+  }).filter((group) => group.ruleIds.length);
 }
 
 function saveRuleGroups() {
@@ -1377,13 +1439,16 @@ function clampIndex(index, length) {
 }
 
 function defaultRuleGroups() {
-  return [{
+  const group = {
     id: "universal",
     name: "All Rules Agreement",
     description: "Runs all available signal rules and highlights stocks where enough independent rules agree.",
     minMatches: Math.min(2, Math.max(1, state.rules.length)),
     ruleIds: state.rules.map((rule) => rule.id),
-  }];
+  };
+  group.ruleWeights = cleanRuleWeights(group.ruleIds);
+  group.minWeightedScore = defaultWeightedScore(group);
+  return [group];
 }
 
 function starterRules(defaultRule) {
@@ -1646,13 +1711,18 @@ function momentumValues(overrides = {}) {
 
 function starterRuleGroups() {
   const availableIds = new Set(state.rules.map((rule) => rule.id));
-  const group = (id, name, minMatches, ruleIds, description = "") => ({
-    id,
-    name,
-    description,
-    minMatches,
-    ruleIds: ruleIds.filter((ruleId) => availableIds.has(ruleId)),
-  });
+  const group = (id, name, minMatches, ruleIds, description = "") => {
+    const selectedRuleIds = ruleIds.filter((ruleId) => availableIds.has(ruleId));
+    return {
+      id,
+      name,
+      description,
+      minMatches,
+      ruleIds: selectedRuleIds,
+      ruleWeights: cleanRuleWeights(selectedRuleIds),
+      minWeightedScore: Number(((minMatches / Math.max(1, selectedRuleIds.length)) * 100).toFixed(2)),
+    };
+  };
   return [
     ...defaultRuleGroups(),
     group("group_core_agreement", "Core Agreement", 2, [

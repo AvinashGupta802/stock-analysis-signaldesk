@@ -67,6 +67,10 @@
           <label>Min matching rules
             <input id="minRuleMatchesInput" type="number" min="1" step="1" value="1" />
           </label>
+          <label>Min weighted score %
+            <input id="minWeightedScoreInput" type="number" min="1" max="100" step="1" value="50" />
+          </label>
+          <p class="helper-text">A stock must satisfy both the minimum rule count and weighted score. New and existing rules default to weight 1.0.</p>
           <div id="ruleGroupMembers" class="check-list"></div>
           <div class="button-row">
             <button id="saveRuleGroupButton" type="button">Save rec group</button>
@@ -197,7 +201,7 @@
                 <thead>
                   <tr>
                     <th>Stock</th>
-                    <th>Rules</th>
+                    <th>Agreement</th>
                     <th>Close</th>
                     <th>Volume</th>
                     <th>Vol/20D</th>
@@ -280,6 +284,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-38"></script>
+    <script src="./app.js?v=builder-39"></script>
   </body>
 </html>

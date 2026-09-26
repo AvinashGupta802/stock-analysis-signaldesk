@@ -573,6 +573,32 @@ input[type="search"] {
   color: var(--ink);
 }
 
+.weighted-rule-item {
+  grid-template-columns: 18px minmax(0, 1fr) 72px;
+  align-items: center;
+}
+
+.rule-weight-control {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.rule-weight-control input[type="number"] {
+  width: 72px;
+  height: 32px;
+  margin-top: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.agreement-score {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .stock-suggestions {
   display: grid;
   gap: 4px;

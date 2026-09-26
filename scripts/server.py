@@ -329,7 +329,9 @@ CREATE TABLE IF NOT EXISTS strategy_rule_groups (
   kind TEXT NOT NULL DEFAULT 'system',
   status TEXT NOT NULL DEFAULT 'active',
   min_matches INTEGER NOT NULL DEFAULT 1,
+  min_weighted_score REAL NOT NULL DEFAULT 0,
   rule_ids_json TEXT NOT NULL,
+  rule_weights_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -373,6 +375,8 @@ CREATE TABLE IF NOT EXISTS analysis_results (
 
 
 class Handler(SimpleHTTPRequestHandler):
+    STATIC_PATHS = {"/", "/index.html", "/app.js", "/styles.css"}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
@@ -384,6 +388,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(get_prices(parse_qs(parsed.query)))
         if parsed.path == "/api/stocks/search":
             return self.send_json(search_stocks(parse_qs(parsed.query)))
+        if parsed.path not in self.STATIC_PATHS:
+            return self.send_error(404, "Not found")
         return super().do_GET()
 
     def do_POST(self):
@@ -583,8 +589,9 @@ def get_rule_group_results(payload):
     limit = int(payload.get("limit") or 200)
     min_matches = int(payload.get("minMatches") or len(rules) or 1)
     min_matches = max(1, min(min_matches, len(rules) or 1))
+    scoring = normalize_group_scoring(rules, min_matches, payload)
     with connect() as conn:
-        stored = get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, group, trade_date, search, limit, min_matches)
+        stored = get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, group, trade_date, search, limit, scoring)
         if stored:
             return stored
     rows = []
@@ -593,16 +600,16 @@ def get_rule_group_results(payload):
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
-            result = evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches, universe_filters)
+            result = evaluate_stock_group_on_date(conn, stock, trade_date, rules, scoring, universe_filters)
             if result["passed"]:
                 rows.append(result)
-    rows.sort(key=lambda row: (row["matchCount"], row["volume"], row["symbol"]), reverse=True)
+    rows.sort(key=lambda row: (row["weightedScore"], row["matchCount"], row["volume"], row["symbol"]), reverse=True)
     return {
         "rules": rules,
         "universeFilters": universe_filters,
         "date": trade_date,
         "group": group,
-        "minMatches": min_matches,
+        **scoring,
         "total": len(rows),
         "results": rows[:limit],
         "metrics": build_scan_metrics(rows),
@@ -649,7 +656,7 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
     }
 
 
-def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, group, trade_date, search, limit, min_matches):
+def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, group, trade_date, search, limit, scoring):
     if not trade_date or len(raw_rules) != len(rules):
         return None
     stored_rules = []
@@ -683,28 +690,37 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
             item.setdefault("matchedRules", [])
             item["matchedRules"].append(
                 {
+                    "id": stored_rule["rule_id"],
                     "name": stored_rule["name"],
+                    "weight": scoring["ruleWeights"].get(stored_rule["rule_id"], 1.0),
                     "reasons": rule_result.get("reasons") or [],
                 }
             )
     rows = []
     for item in by_symbol.values():
         match_count = len(item.get("matchedRules") or [])
-        if match_count < min_matches:
+        agreement = score_group_agreement(
+            [rule["id"] for rule in item.get("matchedRules") or []], scoring
+        )
+        if not agreement["passed"]:
             continue
         item["passed"] = True
         item["matchCount"] = match_count
         item["totalRules"] = len(rules)
-        item["minMatches"] = min_matches
+        item["minMatches"] = scoring["minMatches"]
+        item["matchedWeight"] = agreement["matchedWeight"]
+        item["totalWeight"] = scoring["totalWeight"]
+        item["weightedScore"] = agreement["weightedScore"]
+        item["minWeightedScore"] = scoring["minWeightedScore"]
         item["reasons"] = item.get("matchedRules", [{}])[0].get("reasons", [])
         rows.append(item)
-    rows.sort(key=lambda item: (item["matchCount"], item.get("volume") or 0, item["symbol"]), reverse=True)
+    rows.sort(key=lambda item: (item["weightedScore"], item["matchCount"], item.get("volume") or 0, item["symbol"]), reverse=True)
     return {
         "rules": rules,
         "universeFilters": universe_filters,
         "date": trade_date,
         "group": group,
-        "minMatches": min_matches,
+        **scoring,
         "total": len(rows),
         "results": rows[:limit],
         "metrics": build_scan_metrics(rows),
@@ -1060,7 +1076,10 @@ def get_stock_lab(payload):
             rule_ids = [rule_id for rule_id in group.get("ruleIds", []) if rule_id in {rule["id"] for rule in rules}]
             group_rule_matches = [rule_id for rule_id in rule_ids if rule_id in matched_rule_ids]
             min_matches = max(1, min(int(group.get("minMatches") or 1), len(rule_ids) or 1))
-            if len(group_rule_matches) >= min_matches:
+            group_rules = [rule for rule in rules if rule["id"] in rule_ids]
+            scoring = normalize_group_scoring(group_rules, min_matches, group)
+            agreement = score_group_agreement(group_rule_matches, scoring)
+            if agreement["passed"]:
                 matched_groups.append(
                     {
                         "id": group["id"],
@@ -1068,6 +1087,10 @@ def get_stock_lab(payload):
                         "matchCount": len(group_rule_matches),
                         "totalRules": len(rule_ids),
                         "minMatches": min_matches,
+                        "matchedWeight": agreement["matchedWeight"],
+                        "totalWeight": scoring["totalWeight"],
+                        "weightedScore": agreement["weightedScore"],
+                        "minWeightedScore": scoring["minWeightedScore"],
                     }
                 )
                 group_picks[group["id"]][row["trade_date"]].append(
@@ -1077,6 +1100,7 @@ def get_stock_lab(payload):
                         "volume": row["volume"],
                         "close": row["close"],
                         "matchCount": len(group_rule_matches),
+                        "weightedScore": agreement["weightedScore"],
                     }
                 )
         if not matched_rules and not matched_groups:
@@ -1182,6 +1206,7 @@ def backtest_rule_group(payload):
     max_hold_days = int(payload.get("maxHoldDays") or 5)
     min_matches = int(payload.get("minMatches") or len(rules) or 1)
     min_matches = max(1, min(min_matches, len(rules) or 1))
+    scoring = normalize_group_scoring(rules, min_matches, payload)
 
     picks_by_date = defaultdict(list)
     rows_by_symbol = {}
@@ -1204,14 +1229,18 @@ def backtest_rule_group(payload):
                 for rule in rules:
                     passed, reasons = apply_rule(ctx, rule)
                     if passed:
-                        matched_rules.append({"name": rule["name"], "reasons": reasons})
-                if len(matched_rules) >= min_matches:
+                        rule_id = rule.get("id") or rule["name"]
+                        weight = scoring["ruleWeights"].get(rule_id, 1.0)
+                        matched_rules.append({"id": rule_id, "name": rule["name"], "weight": weight, "reasons": reasons})
+                agreement = score_group_agreement([rule["id"] for rule in matched_rules], scoring)
+                if agreement["passed"]:
                     picks_by_date[row["trade_date"]].append({
                         "symbol": stock["symbol"],
                         "index": index,
                         "volume": row["volume"],
                         "close": row["close"],
                         "matchCount": len(matched_rules),
+                        "weightedScore": agreement["weightedScore"],
                         "matchedRules": matched_rules,
                     })
 
@@ -1221,7 +1250,7 @@ def backtest_rule_group(payload):
         "universeFilters": universe_filters,
         "fromDate": from_date,
         "toDate": to_date,
-        "minMatches": min_matches,
+        **scoring,
         "totalSignals": sum(len(items) for items in picks_by_date.values()),
         "signalDays": len(picks_by_date),
         "summary": summarize_trades(trades, capital),
@@ -1235,7 +1264,7 @@ def backtest_rule_group(payload):
             None,
             from_date,
             to_date,
-            {**payload, "rules": rules, "universeFilters": universe_filters, "minMatches": min_matches},
+            {**payload, "rules": rules, "universeFilters": universe_filters, **scoring},
             trades[:25],
         )
     return response
@@ -1331,7 +1360,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters=None)
     }
 
 
-def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches, universe_filters=None):
+def evaluate_stock_group_on_date(conn, stock, trade_date, rules, scoring, universe_filters=None):
     rows = conn.execute(
         """
         SELECT
@@ -1360,12 +1389,19 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches, un
     failed_rules = []
     for rule in rules:
         passed, reasons = apply_rule(ctx, rule)
-        rule_result = {"name": rule["name"], "reasons": reasons}
+        rule_id = rule.get("id") or rule["name"]
+        rule_result = {
+            "id": rule_id,
+            "name": rule["name"],
+            "weight": scoring["ruleWeights"].get(rule_id, 1.0),
+            "reasons": reasons,
+        }
         if passed:
             matched_rules.append(rule_result)
         else:
             failed_rules.append(rule_result)
-    passed = len(matched_rules) >= min_matches
+    agreement = score_group_agreement([rule["id"] for rule in matched_rules], scoring)
+    passed = agreement["passed"]
     next_row = conn.execute(
         """
         SELECT trade_date, close
@@ -1428,7 +1464,11 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, min_matches, un
         "reasons": universe_reasons + (matched_rules[0]["reasons"] if matched_rules else []),
         "matchCount": len(matched_rules),
         "totalRules": len(rules),
-        "minMatches": min_matches,
+        "minMatches": scoring["minMatches"],
+        "matchedWeight": agreement["matchedWeight"],
+        "totalWeight": scoring["totalWeight"],
+        "weightedScore": agreement["weightedScore"],
+        "minWeightedScore": scoring["minWeightedScore"],
         "matchedRules": matched_rules,
         "failedRules": failed_rules,
     }
@@ -1846,7 +1886,16 @@ def build_backtest_context(rows, indicators, index):
 def simulate_trades(picks_by_date, rows_by_symbol, top_n, capital, target_pct, stop_pct, max_hold_days):
     trades = []
     for signal_date in sorted(picks_by_date):
-        picks = sorted(picks_by_date[signal_date], key=lambda row: (row.get("matchCount", 1), row["volume"], row["symbol"]), reverse=True)[:top_n]
+        picks = sorted(
+            picks_by_date[signal_date],
+            key=lambda row: (
+                row.get("weightedScore", row.get("matchCount", 1)),
+                row.get("matchCount", 1),
+                row["volume"],
+                row["symbol"],
+            ),
+            reverse=True,
+        )[:top_n]
         for pick in picks:
             rows = rows_by_symbol[pick["symbol"]]
             entry_index = pick["index"] + 1
@@ -2008,12 +2057,61 @@ def normalize_rule(rule):
         defaults = {field["key"]: field["default"] for field in definition["fields"]}
         defaults.update(item.get("values") or {})
         filters.append({"id": definition["id"], "values": defaults})
-    return {"name": str(rule.get("name") or "Untitled Rule").strip() or "Untitled Rule", "filters": filters}
+    normalized = {
+        "name": str(rule.get("name") or "Untitled Rule").strip() or "Untitled Rule",
+        "filters": filters,
+    }
+    if rule.get("id"):
+        normalized["id"] = str(rule["id"])
+    if rule.get("version") is not None:
+        normalized["version"] = int(rule["version"])
+    return normalized
 
 
 def normalize_rules(rules):
     normalized = [normalize_rule(rule) for rule in rules if isinstance(rule, dict)]
     return [rule for rule in normalized if rule["filters"]]
+
+
+def normalize_group_scoring(rules, min_matches, payload=None):
+    payload = payload or {}
+    raw_weights = payload.get("ruleWeights") if isinstance(payload.get("ruleWeights"), dict) else {}
+    rule_weights = {}
+    for index, rule in enumerate(rules):
+        rule_id = rule.get("id") or f"rule_{index + 1}"
+        try:
+            weight = float(raw_weights.get(rule_id, 1))
+        except (TypeError, ValueError):
+            weight = 1.0
+        rule_weights[rule_id] = max(0.25, min(weight, 3.0))
+    total_weight = sum(rule_weights.values())
+    default_score = (min_matches / len(rules) * 100) if rules else 100
+    raw_score = payload.get("minWeightedScore")
+    try:
+        min_weighted_score = default_score if raw_score is None else float(raw_score)
+    except (TypeError, ValueError):
+        min_weighted_score = default_score
+    return {
+        "minMatches": min_matches,
+        "minWeightedScore": max(1.0, min(min_weighted_score, 100.0)),
+        "ruleWeights": rule_weights,
+        "totalWeight": total_weight,
+    }
+
+
+def score_group_agreement(matched_rule_ids, scoring):
+    matched_rule_ids = list(dict.fromkeys(matched_rule_ids))
+    matched_weight = sum(scoring["ruleWeights"].get(rule_id, 1.0) for rule_id in matched_rule_ids)
+    weighted_score = (matched_weight / scoring["totalWeight"] * 100) if scoring["totalWeight"] else 0
+    return {
+        "passed": (
+            len(matched_rule_ids) >= scoring["minMatches"]
+            and weighted_score + 1e-9 >= scoring["minWeightedScore"]
+        ),
+        "matchCount": len(matched_rule_ids),
+        "matchedWeight": matched_weight,
+        "weightedScore": weighted_score,
+    }
 
 
 def normalize_universe_filters(raw_filters):
@@ -2218,6 +2316,11 @@ def ensure_group_schema(conn):
 
 def ensure_strategy_schema(conn):
     conn.executescript(STRATEGY_SCHEMA)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(strategy_rule_groups)")}
+    if "min_weighted_score" not in columns:
+        conn.execute("ALTER TABLE strategy_rule_groups ADD COLUMN min_weighted_score REAL NOT NULL DEFAULT 0")
+    if "rule_weights_json" not in columns:
+        conn.execute("ALTER TABLE strategy_rule_groups ADD COLUMN rule_weights_json TEXT NOT NULL DEFAULT '{}'")
     migrate_legacy_strategy(conn)
 
 
@@ -2249,7 +2352,8 @@ def load_strategy(conn):
     groups = []
     for row in conn.execute(
         """
-        SELECT group_id, name, description, kind, status, min_matches, rule_ids_json
+        SELECT group_id, name, description, kind, status, min_matches,
+               min_weighted_score, rule_ids_json, rule_weights_json
         FROM strategy_rule_groups
         WHERE status = 'active'
         ORDER BY kind DESC, name
@@ -2259,6 +2363,13 @@ def load_strategy(conn):
             rule_ids = json.loads(row["rule_ids_json"])
         except json.JSONDecodeError:
             rule_ids = []
+        try:
+            rule_weights = json.loads(row["rule_weights_json"] or "{}")
+        except json.JSONDecodeError:
+            rule_weights = {}
+        clean_rule_ids = rule_ids if isinstance(rule_ids, list) else []
+        default_score = (row["min_matches"] / len(clean_rule_ids) * 100) if clean_rule_ids else 100
+        stored_score = float(row["min_weighted_score"] or 0)
         groups.append(
             {
                 "id": row["group_id"],
@@ -2266,7 +2377,12 @@ def load_strategy(conn):
                 "description": row["description"] or "",
                 "kind": row["kind"],
                 "minMatches": row["min_matches"],
-                "ruleIds": rule_ids if isinstance(rule_ids, list) else [],
+                "minWeightedScore": stored_score if stored_score > 0 else default_score,
+                "ruleIds": clean_rule_ids,
+                "ruleWeights": {
+                    rule_id: max(0.25, min(float(rule_weights.get(rule_id, 1)), 3.0))
+                    for rule_id in clean_rule_ids
+                },
             }
         )
     settings = load_strategy_settings(conn)
@@ -2375,21 +2491,38 @@ def save_strategy_tables(conn, strategy, default_kind="user"):
         if not rule_ids:
             continue
         min_matches = max(1, min(int(raw_group.get("minMatches") or 1), len(rule_ids)))
+        raw_weights = raw_group.get("ruleWeights") if isinstance(raw_group.get("ruleWeights"), dict) else {}
+        rule_weights = {}
+        for rule_id in rule_ids:
+            try:
+                weight = float(raw_weights.get(rule_id, 1))
+            except (TypeError, ValueError):
+                weight = 1.0
+            rule_weights[rule_id] = max(0.25, min(weight, 3.0))
+        default_score = min_matches / len(rule_ids) * 100
+        try:
+            min_weighted_score = float(raw_group.get("minWeightedScore", default_score))
+        except (TypeError, ValueError):
+            min_weighted_score = default_score
+        min_weighted_score = max(1.0, min(min_weighted_score, 100.0))
         existing = existing_groups.get(group_id)
         kind = raw_group.get("kind") or (existing["kind"] if existing else default_kind)
         conn.execute(
             """
             INSERT INTO strategy_rule_groups (
-              group_id, name, description, kind, status, min_matches, rule_ids_json, updated_at
+              group_id, name, description, kind, status, min_matches,
+              min_weighted_score, rule_ids_json, rule_weights_json, updated_at
             )
-            VALUES (?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(group_id) DO UPDATE SET
               name = excluded.name,
               description = excluded.description,
               kind = excluded.kind,
               status = 'active',
               min_matches = excluded.min_matches,
+              min_weighted_score = excluded.min_weighted_score,
               rule_ids_json = excluded.rule_ids_json,
+              rule_weights_json = excluded.rule_weights_json,
               updated_at = CURRENT_TIMESTAMP
             """,
             (
@@ -2398,7 +2531,9 @@ def save_strategy_tables(conn, strategy, default_kind="user"):
                 raw_group.get("description") or "",
                 kind,
                 min_matches,
+                min_weighted_score,
                 json.dumps(rule_ids),
+                json.dumps(rule_weights, sort_keys=True),
             ),
         )
     conn.execute(

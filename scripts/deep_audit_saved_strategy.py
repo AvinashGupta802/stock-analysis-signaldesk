@@ -12,6 +12,8 @@ from server import (
     load_group_stocks,
     load_rows,
     load_strategy,
+    normalize_group_scoring,
+    score_group_agreement,
     simulate_trades,
     summarize_trades,
 )
@@ -53,6 +55,8 @@ def main():
         for group in strategy["ruleGroups"]
     ]
     groups = [group for group in groups if group["rules"]]
+    for group in groups:
+        group["scoring"] = normalize_group_scoring(group["rules"], group["minMatches"], group)
     print(f"Loaded {len(rules)} active rules and {len(groups)} active groups from SQLite", flush=True)
 
     windows = build_windows(args.from_date, args.to_date)
@@ -171,17 +175,20 @@ def build_picks(universe, from_date, to_date, max_hold, rules, groups):
                         make_pick(stock["symbol"], index, row, len(rows) - index - 1, 1)
                     )
                 for group in groups:
-                    match_count = sum(rule["id"] in passed_rule_ids for rule in group["rules"])
-                    if match_count >= group["minMatches"]:
+                    matched_rule_ids = [rule["id"] for rule in group["rules"] if rule["id"] in passed_rule_ids]
+                    match_count = len(matched_rule_ids)
+                    agreement = score_group_agreement(matched_rule_ids, group["scoring"])
+                    if agreement["passed"]:
                         picks[group["id"]][signal_date].append(
                             make_pick(
-                                stock["symbol"], index, row, len(rows) - index - 1, match_count
+                                stock["symbol"], index, row, len(rows) - index - 1,
+                                match_count, agreement["weightedScore"]
                             )
                         )
     return rows_by_symbol, picks
 
 
-def make_pick(symbol, index, row, future_bars, match_count):
+def make_pick(symbol, index, row, future_bars, match_count, weighted_score=None):
     return {
         "symbol": symbol,
         "index": index,
@@ -189,6 +196,7 @@ def make_pick(symbol, index, row, future_bars, match_count):
         "close": row["close"],
         "futureBars": future_bars,
         "matchCount": match_count,
+        "weightedScore": weighted_score if weighted_score is not None else match_count,
     }
 
 
