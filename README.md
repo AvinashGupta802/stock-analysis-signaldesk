@@ -44,6 +44,20 @@ The importer skips weekends and unavailable exchange files. Use `--no-download` 
 
 ## EOD Workflow
 
+Run the complete daily pipeline. With no date, it imports the previous weekday, verifies that both NSE reports exist, and then runs EOD analysis:
+
+```powershell
+python scripts\run_daily_pipeline.py
+```
+
+Run or repeat a specific trading date:
+
+```powershell
+python scripts\run_daily_pipeline.py --date 2026-09-25
+```
+
+If either the price or delivery report has not yet been published, the command stops before analysis and can safely be retried later.
+
 After importing a trading day, evaluate every active saved rule and rule group and persist the results:
 
 ```powershell
