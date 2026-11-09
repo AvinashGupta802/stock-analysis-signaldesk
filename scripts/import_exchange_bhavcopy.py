@@ -60,12 +60,21 @@ CREATE TABLE IF NOT EXISTS daily_delivery (
   FOREIGN KEY (instrument_id) REFERENCES instruments(id)
 );
 
+CREATE TABLE IF NOT EXISTS benchmark_prices (
+  index_code TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  close REAL NOT NULL,
+  source_file TEXT,
+  PRIMARY KEY (index_code, trade_date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_instruments_symbol ON instruments(symbol);
 CREATE INDEX IF NOT EXISTS idx_instruments_isin ON instruments(isin);
 CREATE INDEX IF NOT EXISTS idx_daily_prices_date ON daily_prices(trade_date);
 CREATE INDEX IF NOT EXISTS idx_daily_prices_instrument_date ON daily_prices(instrument_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_daily_delivery_date ON daily_delivery(trade_date);
 CREATE INDEX IF NOT EXISTS idx_daily_delivery_instrument_date ON daily_delivery(instrument_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_benchmark_prices_date ON benchmark_prices(trade_date);
 """
 
 HEADERS = {
@@ -78,7 +87,7 @@ HEADERS = {
 def main():
     parser = argparse.ArgumentParser(description="Download NSE/BSE EOD reports and import into clean SQLite DB.")
     parser.add_argument("--exchange", choices=["NSE", "BSE", "both"], default="both")
-    parser.add_argument("--dataset", choices=["prices", "delivery", "both"], default="prices")
+    parser.add_argument("--dataset", choices=["prices", "delivery", "indices", "both", "all"], default="prices")
     parser.add_argument("--date", help="Single date in YYYY-MM-DD")
     parser.add_argument("--start-date", help="Start date in YYYY-MM-DD")
     parser.add_argument("--end-date", help="End date in YYYY-MM-DD")
@@ -90,7 +99,12 @@ def main():
 
     dates = requested_dates(args)
     exchanges = ["NSE", "BSE"] if args.exchange == "both" else [args.exchange]
-    datasets = ["prices", "delivery"] if args.dataset == "both" else [args.dataset]
+    if args.dataset == "both":
+        datasets = ["prices", "delivery"]
+    elif args.dataset == "all":
+        datasets = ["prices", "delivery", "indices"]
+    else:
+        datasets = [args.dataset]
     raw_dir = Path(args.raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -107,7 +121,7 @@ def main():
             continue
         for dataset in datasets:
             for exchange in exchanges:
-                if dataset == "delivery" and exchange != "NSE":
+                if dataset in {"delivery", "indices"} and exchange != "NSE":
                     skipped += 1
                     continue
                 try:
@@ -133,6 +147,7 @@ def main():
           COUNT(*) AS instruments,
           (SELECT COUNT(*) FROM daily_prices) AS rows,
           (SELECT COUNT(*) FROM daily_delivery) AS delivery_rows,
+          (SELECT COUNT(*) FROM benchmark_prices) AS benchmark_rows,
           (SELECT MIN(trade_date) FROM daily_prices) AS first_date,
           (SELECT MAX(trade_date) FROM daily_prices) AS last_date
         FROM instruments
@@ -146,7 +161,8 @@ def main():
     print(f"Instruments: {stats[0]:,}")
     print(f"Daily rows: {stats[1]:,}")
     print(f"Delivery rows: {stats[2]:,}")
-    print(f"Date range: {stats[3]} to {stats[4]}")
+    print(f"Benchmark rows: {stats[3]:,}")
+    print(f"Date range: {stats[4]} to {stats[5]}")
     if failed:
         print(f"Failures: {len(failed)}")
         for exchange, dataset, date, reason in failed[:20]:
@@ -193,6 +209,9 @@ def urls_for(exchange, trade_date, dataset):
     if dataset == "delivery":
         name = f"MTO_{trade_date:%d%m%Y}.DAT"
         return [f"https://nsearchives.nseindia.com/archives/equities/mto/{name}"]
+    if dataset == "indices":
+        name = f"ind_close_all_{trade_date:%d%m%Y}.csv"
+        return [f"https://nsearchives.nseindia.com/content/indices/{name}"]
     if exchange == "NSE":
         name = f"BhavCopy_NSE_CM_0_0_0_{trade_date:%Y%m%d}_F_0000.csv.zip"
         return [f"https://nsearchives.nseindia.com/content/cm/{name}"]
@@ -207,6 +226,8 @@ def urls_for(exchange, trade_date, dataset):
 def filename_for(exchange, trade_date, dataset="prices"):
     if dataset == "delivery":
         return f"MTO_{trade_date:%d%m%Y}.DAT"
+    if dataset == "indices":
+        return f"ind_close_all_{trade_date:%d%m%Y}.csv"
     return f"BhavCopy_{exchange}_CM_0_0_0_{trade_date:%Y%m%d}_F_0000.CSV"
 
 
@@ -233,7 +254,7 @@ def existing_report(raw_dir, exchange, trade_date, dataset):
     exchange_dir = raw_dir / exchange / dataset
     legacy_exchange_dir = raw_dir / exchange
     candidates = [exchange_dir / filename_for(exchange, trade_date, dataset)]
-    if dataset == "delivery":
+    if dataset in {"delivery", "indices"}:
         candidates.append(legacy_exchange_dir / filename_for(exchange, trade_date, dataset))
         return next((path for path in candidates if path.exists() and path.stat().st_size > 0), None)
     if exchange == "NSE":
@@ -250,6 +271,8 @@ def existing_report(raw_dir, exchange, trade_date, dataset):
 def import_report(conn, csv_path, exchange, trade_date, dataset):
     if dataset == "delivery":
         return import_delivery_file(conn, csv_path, trade_date)
+    if dataset == "indices":
+        return import_index_file(conn, csv_path, trade_date)
     return import_price_file(conn, csv_path, exchange, trade_date)
 
 
@@ -328,6 +351,32 @@ def import_delivery_file(conn, csv_path, trade_date):
                     parsed["delivery_pct"],
                     parsed["source_file"],
                 ),
+            )
+            count += 1
+    return count
+
+
+def import_index_file(conn, csv_path, trade_date):
+    count = 0
+    with csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            normalized = {clean_key(key): value for key, value in row.items()}
+            index_name = clean_name(pick(normalized, "INDEXNAME", "INDEX"))
+            close = to_float(pick(normalized, "CLOSINGINDEXVALUE", "CLOSE"))
+            row_date = parse_date(pick(normalized, "INDEXDATE", "DATE")) or trade_date.date().isoformat()
+            if not index_name or close is None:
+                continue
+            index_code = " ".join(index_name.upper().split())
+            conn.execute(
+                """
+                INSERT INTO benchmark_prices (index_code, trade_date, close, source_file)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(index_code, trade_date) DO UPDATE SET
+                  close = excluded.close,
+                  source_file = excluded.source_file
+                """,
+                (index_code, row_date, close, csv_path.name),
             )
             count += 1
     return count
@@ -489,7 +538,12 @@ def parse_date(value):
     text = clean_name(value)
     if not text:
         return None
-    return datetime.strptime(text[:10], "%Y-%m-%d").date().isoformat()
+    for date_format in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text[:10], date_format).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError(f"Unsupported date format: {text}")
 
 
 def clean_key(value):

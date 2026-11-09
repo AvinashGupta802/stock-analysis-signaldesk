@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 from collections import defaultdict
+from functools import lru_cache
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -60,6 +61,16 @@ FILTER_LIBRARY = [
         "fields": [
             {"key": "minRelativeVolume10D", "label": "Min volume vs 10D avg", "default": 2, "step": 0.1},
             {"key": "maxRelativeVolume10D", "label": "Max volume vs 10D avg", "default": 999, "step": 0.1},
+        ],
+    },
+    {
+        "id": "volume_sma10_vs_sma20",
+        "name": "Volume SMA10 vs SMA20",
+        "category": "Participation",
+        "meaning": "Keep stocks whose 10-day average traded volume is a chosen multiple of their 20-day average, showing that participation is accelerating.",
+        "fields": [
+            {"key": "minVolumeSmaRatio", "label": "Min SMA10 / SMA20", "default": 1.3, "step": 0.1},
+            {"key": "maxVolumeSmaRatio", "label": "Max SMA10 / SMA20", "default": 999, "step": 0.1},
         ],
     },
     {
@@ -142,6 +153,16 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "distance_from_52w_high",
+        "name": "Distance From 52W High",
+        "category": "Market Structure",
+        "meaning": "Keep stocks whose close is no more than a chosen percentage below their highest price of the last 52 trading weeks.",
+        "fields": [
+            {"key": "minDistanceFrom52WHigh", "label": "Min distance below high %", "default": 0, "step": 0.5},
+            {"key": "maxDistanceFrom52WHigh", "label": "Max distance below high %", "default": 15, "step": 0.5},
+        ],
+    },
+    {
         "id": "close_near_20d_high",
         "name": "Close Near 20D High",
         "category": "Breakout",
@@ -187,6 +208,34 @@ FILTER_LIBRARY = [
         "meaning": "Keep stocks that satisfy enough short-term trend checks using EMA9, EMA20, and SMA50.",
         "fields": [
             {"key": "minEmaTrendChecks", "label": "Min trend checks", "default": 3, "step": 1},
+        ],
+    },
+    {
+        "id": "close_above_sma50",
+        "name": "Close vs SMA50",
+        "category": "Trend",
+        "meaning": "Keep stocks whose closing price is above the 50-day simple moving average by at least your chosen margin.",
+        "fields": [
+            {"key": "minCloseVsSma50Pct", "label": "Min close above SMA50 %", "default": 0, "step": 0.5},
+        ],
+    },
+    {
+        "id": "sma50_above_sma200",
+        "name": "SMA50 vs SMA200",
+        "category": "Trend",
+        "meaning": "Keep stocks whose 50-day simple moving average is above the 200-day average, indicating a positive long-term trend.",
+        "fields": [
+            {"key": "minSma50VsSma200Pct", "label": "Min SMA50 above SMA200 %", "default": 0, "step": 0.5},
+        ],
+    },
+    {
+        "id": "relative_strength_nifty500_3m",
+        "name": "3M Relative Strength vs Nifty 500",
+        "category": "Relative Strength",
+        "meaning": "Keep stocks whose three-month return exceeds the Nifty 500 index return by your chosen percentage-point range.",
+        "fields": [
+            {"key": "minRelativeStrengthNifty5003M", "label": "Min excess return %", "default": 5, "step": 0.5},
+            {"key": "maxRelativeStrengthNifty5003M", "label": "Max excess return %", "default": 999, "step": 0.5},
         ],
     },
     {
@@ -306,6 +355,16 @@ CREATE TABLE IF NOT EXISTS stock_group_members (
 """
 
 STRATEGY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS benchmark_prices (
+  index_code TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  close REAL NOT NULL,
+  source_file TEXT,
+  PRIMARY KEY (index_code, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_benchmark_prices_date ON benchmark_prices(trade_date);
+
 CREATE TABLE IF NOT EXISTS strategy_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -1518,6 +1577,12 @@ def evaluate_filter(ctx, selected):
         max_relative_volume = float(values.get("maxRelativeVolume10D", 999))
         passed = min_relative_volume <= ctx["relative_volume_10d"] <= max_relative_volume
         return passed, f"Volume is {ctx['relative_volume_10d']:.2f}x of 10D average; required {min_relative_volume:g}x-{max_relative_volume:g}x."
+    if filter_id == "volume_sma10_vs_sma20":
+        min_ratio = float(values.get("minVolumeSmaRatio", 1.3))
+        max_ratio = float(values.get("maxVolumeSmaRatio", 999))
+        ratio = ctx["volume_sma10_vs_sma20"]
+        passed = min_ratio <= ratio <= max_ratio
+        return passed, f"Volume SMA10 is {ratio:.2f}x SMA20; required {min_ratio:g}x-{max_ratio:g}x."
     if filter_id == "delivery_pct_range":
         min_delivery_pct = float(values.get("minDeliveryPct", 50))
         max_delivery_pct = float(values.get("maxDeliveryPct", 100))
@@ -1563,6 +1628,14 @@ def evaluate_filter(ctx, selected):
         max_range_position = float(values.get("maxRangePosition52W", 100))
         passed = min_range_position <= ctx["range_position_52w"] <= max_range_position
         return passed, f"52W range position {ctx['range_position_52w']:.2f}%; required {min_range_position:g}%-{max_range_position:g}%."
+    if filter_id == "distance_from_52w_high":
+        if ctx["history_count"] < 252:
+            return False, f"Only {ctx['history_count']} trading days are available; 252 are required for a 52W-high comparison."
+        min_distance = float(values.get("minDistanceFrom52WHigh", 0))
+        max_distance = float(values.get("maxDistanceFrom52WHigh", 15))
+        distance = ctx["distance_from_52w_high"]
+        passed = min_distance <= distance <= max_distance
+        return passed, f"Close is {distance:.2f}% below the 52W high; required {min_distance:g}%-{max_distance:g}%."
     if filter_id == "close_near_20d_high":
         max_distance = float(values.get("maxDistanceFrom20DHigh", 2))
         distance_below_high = abs(min(ctx["distance_from_20d_high"], 0))
@@ -1593,6 +1666,30 @@ def evaluate_filter(ctx, selected):
         passed_count = sum(1 for item in checks if item)
         passed = passed_count >= min_checks
         return passed, f"EMA trend {passed_count}/3 checks passed; required >= {min_checks}."
+    if filter_id == "close_above_sma50":
+        if ctx["history_count"] < 50:
+            return False, f"Only {ctx['history_count']} trading days are available; 50 are required for SMA50."
+        min_gap = float(values.get("minCloseVsSma50Pct", 0))
+        gap_pct = pct(ctx["close"], ctx["sma50"])
+        passed = ctx["close"] >= ctx["sma50"] and gap_pct >= min_gap
+        return passed, f"Close is {gap_pct:+.2f}% vs SMA50; required close >= SMA50 and gap >= {min_gap:g}%."
+    if filter_id == "sma50_above_sma200":
+        if ctx["history_count"] < 200:
+            return False, f"Only {ctx['history_count']} trading days are available; 200 are required for SMA200."
+        min_gap = float(values.get("minSma50VsSma200Pct", 0))
+        gap_pct = pct(ctx["sma50"], ctx["sma200"])
+        passed = ctx["sma50"] >= ctx["sma200"] and gap_pct >= min_gap
+        return passed, f"SMA50 is {gap_pct:+.2f}% vs SMA200; required SMA50 >= SMA200 and gap >= {min_gap:g}%."
+    if filter_id == "relative_strength_nifty500_3m":
+        if ctx["history_count"] < 64:
+            return False, f"Only {ctx['history_count']} trading days are available; 64 are required for 3M relative strength."
+        min_strength = float(values.get("minRelativeStrengthNifty5003M", 5))
+        max_strength = float(values.get("maxRelativeStrengthNifty5003M", 999))
+        strength = ctx.get("relative_strength_nifty500_3m")
+        if strength is None:
+            return False, "Nifty 500 history is unavailable for this date; import index EOD data before using this filter."
+        passed = min_strength <= strength <= max_strength
+        return passed, f"3M excess return vs Nifty 500 is {strength:+.2f}%; required {min_strength:g}%-{max_strength:g}%."
     if filter_id == "rsi14_rising":
         min_rise = float(values.get("minRsiRise", 0))
         rsi_rise = ctx["rsi14"] - ctx["previous_rsi14"]
@@ -1642,6 +1739,24 @@ def evaluate_filter(ctx, selected):
     return False, "Unknown filter."
 
 
+@lru_cache(maxsize=1024)
+def nifty500_momentum_3m(trade_date):
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT trade_date, close
+            FROM benchmark_prices
+            WHERE index_code = 'NIFTY 500' AND trade_date <= ?
+            ORDER BY trade_date DESC
+            LIMIT 64
+            """,
+            (trade_date,),
+        ).fetchall()
+    if len(rows) < 64 or rows[0][0] != trade_date:
+        return None
+    return pct(rows[0][1], rows[63][1])
+
+
 def build_context(rows, index):
     window = rows[:index + 1]
     closes = [row["close"] for row in window]
@@ -1664,13 +1779,17 @@ def build_context(rows, index):
     ema10 = ema_series(closes, 10)[-1]
     ema20 = ema_series(closes, 20)[-1]
     sma50 = avg(closes[-50:])
+    sma200 = avg(closes[-200:])
     macd = macd_series(closes)
     atr14 = atr_series(window, 14)[-1]
     rsi_values = rsi_series(closes, 14)
     mfi14 = mfi_series(window, 14)[-1]
     cci14 = cci_series(window, 14)[-1]
+    momentum_3m = lookback_pct(rows, index, 63)
+    benchmark_momentum_3m = nifty500_momentum_3m(current["trade_date"])
     return {
         "date": current["trade_date"],
+        "history_count": index + 1,
         "close": current["close"],
         "volume": current["volume"],
         "deliverable_qty": current.get("deliverable_qty"),
@@ -1679,6 +1798,7 @@ def build_context(rows, index):
         "relative_delivery": relative_to_avg(current.get("deliverable_qty"), avg_delivery_20),
         "adv10": adv10,
         "adv20": adv20,
+        "volume_sma10_vs_sma20": relative_to_avg(adv10, adv20),
         "relative_volume_10d": relative_to_avg(current["volume"], adv10),
         "relative_volume": relative_to_avg(current["volume"], adv20),
         "price_change_1d": lookback_pct(rows, index, 1),
@@ -1686,7 +1806,7 @@ def build_context(rows, index):
         "momentum_1w": lookback_pct(rows, index, 5),
         "momentum_15d": lookback_pct(rows, index, 15),
         "momentum_1m": lookback_pct(rows, index, 21),
-        "momentum_3m": lookback_pct(rows, index, 63),
+        "momentum_3m": momentum_3m,
         "momentum_6m": lookback_pct(rows, index, 126),
         "momentum_1y": lookback_pct(rows, index, 252),
         "momentum_6m_to_12m": period_pct(rows, index, 252, 126),
@@ -1699,6 +1819,7 @@ def build_context(rows, index):
         "ema10": ema10,
         "ema20": ema20,
         "sma50": sma50,
+        "sma200": sma200,
         "macd_line": macd["line"][-1],
         "macd_signal": macd["signal"][-1],
         "macd_histogram": macd["histogram"][-1],
@@ -1708,6 +1829,11 @@ def build_context(rows, index):
         "high_52w": high_52w,
         "low_52w": low_52w,
         "range_position_52w": range_position(current["close"], low_52w, high_52w),
+        "distance_from_52w_high": max(0, -pct(current["close"], high_52w)),
+        "nifty500_momentum_3m": benchmark_momentum_3m,
+        "relative_strength_nifty500_3m": (
+            momentum_3m - benchmark_momentum_3m if benchmark_momentum_3m is not None else None
+        ),
         "obv_3d": relative_to_avg(obv[-1] - obv[-4], adv20) if len(obv) >= 4 else 0,
         "rsi14": rsi_values[-1],
         "previous_rsi14": rsi_values[-2] if len(rsi_values) >= 2 else rsi_values[-1],
@@ -1739,9 +1865,11 @@ def build_indicators(rows):
         adv20[index] = avg(volumes[index - 20:index])
     relative_volume_10d = [0] * len(rows)
     relative_volume = [0] * len(rows)
+    volume_sma10_vs_sma20 = [0] * len(rows)
     avg_delivery_20 = [0] * len(rows)
     relative_delivery = [0] * len(rows)
     sma50 = [0] * len(rows)
+    sma200 = [0] * len(rows)
     close_position_day = [50] * len(rows)
     compression_10d = [0] * len(rows)
     rupee_liquidity_cr = [0] * len(rows)
@@ -1750,9 +1878,11 @@ def build_indicators(rows):
     for index in range(len(rows)):
         relative_volume_10d[index] = relative_to_avg(volumes[index], adv10[index])
         relative_volume[index] = relative_to_avg(volumes[index], adv20[index])
+        volume_sma10_vs_sma20[index] = relative_to_avg(adv10[index], adv20[index])
         avg_delivery_20[index] = avg_available(delivery_quantities[index - 20:index]) if index >= 20 else 0
         relative_delivery[index] = relative_to_avg(delivery_quantities[index], avg_delivery_20[index])
         sma50[index] = avg(closes[max(0, index - 49):index + 1])
+        sma200[index] = avg(closes[max(0, index - 199):index + 1])
         close_position_day[index] = range_position(closes[index], lows[index], highs[index])
         compression_10d[index] = ((max(highs[max(0, index - 9):index + 1]) - min(lows[max(0, index - 9):index + 1])) / closes[index]) * 100 if closes[index] else 0
         rupee_liquidity_cr[index] = (closes[index] * adv20[index]) / 10_000_000
@@ -1770,6 +1900,9 @@ def build_indicators(rows):
     high_52w = [0] * len(rows)
     low_52w = [0] * len(rows)
     range_position_52w = [50] * len(rows)
+    distance_from_52w_high = [0] * len(rows)
+    nifty500_momentum = [None] * len(rows)
+    relative_strength_nifty500 = [None] * len(rows)
     high_20d = [0] * len(rows)
     distance_from_20d_high = [0] * len(rows)
     obv_3d = [0] * len(rows)
@@ -1781,6 +1914,7 @@ def build_indicators(rows):
         high_52w[index] = max(highs[start:index + 1])
         low_52w[index] = min(lows[start:index + 1])
         range_position_52w[index] = range_position(closes[index], low_52w[index], high_52w[index])
+        distance_from_52w_high[index] = max(0, -pct(closes[index], high_52w[index]))
     for index in range(3, len(rows)):
         momentum_3d[index] = pct(closes[index], closes[index - 3])
         obv_3d[index] = relative_to_avg(obv[index] - obv[index - 3], adv20[index])
@@ -1790,6 +1924,9 @@ def build_indicators(rows):
         momentum_15d[index] = pct(closes[index], closes[index - 15]) if index >= 15 else 0
         momentum_1m[index] = pct(closes[index], closes[index - 21]) if index >= 21 else 0
         momentum_3m[index] = pct(closes[index], closes[index - 63]) if index >= 63 else 0
+        nifty500_momentum[index] = nifty500_momentum_3m(rows[index]["trade_date"])
+        if nifty500_momentum[index] is not None:
+            relative_strength_nifty500[index] = momentum_3m[index] - nifty500_momentum[index]
         momentum_6m[index] = pct(closes[index], closes[index - 126]) if index >= 126 else 0
         momentum_1y[index] = pct(closes[index], closes[index - 252]) if index >= 252 else 0
         momentum_6m_to_12m[index] = pct(closes[index - 126], closes[index - 252]) if index >= 252 else 0
@@ -1799,6 +1936,7 @@ def build_indicators(rows):
         "adv20": adv20,
         "relative_volume_10d": relative_volume_10d,
         "relative_volume": relative_volume,
+        "volume_sma10_vs_sma20": volume_sma10_vs_sma20,
         "avg_delivery_20": avg_delivery_20,
         "relative_delivery": relative_delivery,
         "price_change_1d": price_change_1d,
@@ -1819,6 +1957,7 @@ def build_indicators(rows):
         "ema10": ema10,
         "ema20": ema20,
         "sma50": sma50,
+        "sma200": sma200,
         "macd_line": macd["line"],
         "macd_signal": macd["signal"],
         "macd_histogram": macd["histogram"],
@@ -1828,6 +1967,9 @@ def build_indicators(rows):
         "high_52w": high_52w,
         "low_52w": low_52w,
         "range_position_52w": range_position_52w,
+        "distance_from_52w_high": distance_from_52w_high,
+        "nifty500_momentum_3m": nifty500_momentum,
+        "relative_strength_nifty500_3m": relative_strength_nifty500,
         "obv_3d": obv_3d,
         "rsi14": rsi14,
         "previous_rsi14": previous_rsi14,
@@ -1840,6 +1982,7 @@ def build_backtest_context(rows, indicators, index):
     current = rows[index]
     return {
         "date": current["trade_date"],
+        "history_count": index + 1,
         "close": current["close"],
         "volume": current["volume"],
         "deliverable_qty": current.get("deliverable_qty"),
@@ -1850,6 +1993,7 @@ def build_backtest_context(rows, indicators, index):
         "adv20": indicators["adv20"][index],
         "relative_volume_10d": indicators["relative_volume_10d"][index],
         "relative_volume": indicators["relative_volume"][index],
+        "volume_sma10_vs_sma20": indicators["volume_sma10_vs_sma20"][index],
         "price_change_1d": indicators["price_change_1d"][index],
         "momentum_3d": indicators["momentum_3d"][index],
         "momentum_1w": indicators["momentum_1w"][index],
@@ -1868,6 +2012,7 @@ def build_backtest_context(rows, indicators, index):
         "ema10": indicators["ema10"][index],
         "ema20": indicators["ema20"][index],
         "sma50": indicators["sma50"][index],
+        "sma200": indicators["sma200"][index],
         "macd_line": indicators["macd_line"][index],
         "macd_signal": indicators["macd_signal"][index],
         "macd_histogram": indicators["macd_histogram"][index],
@@ -1877,6 +2022,9 @@ def build_backtest_context(rows, indicators, index):
         "high_52w": indicators["high_52w"][index],
         "low_52w": indicators["low_52w"][index],
         "range_position_52w": indicators["range_position_52w"][index],
+        "distance_from_52w_high": indicators["distance_from_52w_high"][index],
+        "nifty500_momentum_3m": indicators["nifty500_momentum_3m"][index],
+        "relative_strength_nifty500_3m": indicators["relative_strength_nifty500_3m"][index],
         "obv_3d": indicators["obv_3d"][index],
         "rsi14": indicators["rsi14"][index],
         "previous_rsi14": indicators["previous_rsi14"][index],

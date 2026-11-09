@@ -22,7 +22,7 @@ strategy_scoring.py        SQLite database
 
 ## Data Flow
 
-1. `import_exchange_bhavcopy.py` downloads or reads exchange reports and upserts instruments, daily prices, and delivery data.
+1. `import_exchange_bhavcopy.py` downloads or reads exchange reports and upserts instruments, daily prices, delivery data, and benchmark-index closes.
 2. Rules and rule groups are edited in the UI and stored in SQLite.
 3. `run_eod_analysis.py` evaluates the active strategy for a date and stores rule and group results.
 4. The UI requests results for a signal date and stock group. Compatible stored results are returned immediately; changed definitions are evaluated on demand.

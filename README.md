@@ -6,7 +6,7 @@ This is a research tool, not financial advice. Backtest results do not include e
 
 ## Current Scope
 
-- NSE cash-market EOD price, volume, and delivery data
+- NSE cash-market EOD price, volume, delivery, and benchmark-index data
 - Typical holding periods from 2 to 15 trading days
 - User-defined stock groups and combined groups
 - Editable filters, rules, rule groups, and per-rule weights
@@ -40,11 +40,19 @@ Import a date range:
 python scripts\import_exchange_bhavcopy.py --exchange NSE --dataset both --start-date 2026-09-01 --end-date 2026-09-25
 ```
 
+Import NSE price, delivery, and official index-close reports together:
+
+```powershell
+python scripts\import_exchange_bhavcopy.py --exchange NSE --dataset all --date 2026-09-25
+```
+
+The index report supplies the Nifty 500 history used by benchmark-relative-strength filters.
+
 The importer skips weekends and unavailable exchange files. Use `--no-download` to reprocess files already present under `data/raw`. Exchange formats and URLs can change, so verify row counts and the latest date after an import.
 
 ## EOD Workflow
 
-Run the complete daily pipeline. With no date, it imports the previous weekday, verifies that both NSE reports exist, and then runs EOD analysis:
+Run the complete daily pipeline. With no date, it imports the previous weekday, verifies price, delivery, and Nifty 500 data, and then runs EOD analysis:
 
 ```powershell
 python scripts\run_daily_pipeline.py
@@ -101,6 +109,8 @@ Rule weights are bounded from `0.25` to `3.0`. Equal weights preserve the origin
 
 Price range is a universe-level filter. It can be applied to a run independently instead of being duplicated inside every technical rule.
 
+The filter library also includes volume SMA10 versus SMA20, distance from the 52-week high, close versus SMA50, SMA50 versus SMA200, and three-month excess return versus the official Nifty 500 close series. Long-lookback filters reject stocks without enough history instead of calculating shortened substitutes.
+
 ## Backtesting
 
 Run the saved-strategy deep audit without changing strategy definitions in SQLite:
@@ -135,6 +145,7 @@ Run the focused automated checks:
 
 ```powershell
 python -m unittest scripts/test_weighted_groups.py
+python -m unittest scripts/test_growth_filters.py
 python -m py_compile scripts/server.py scripts/strategy_scoring.py scripts/deep_audit_saved_strategy.py
 node --check app.js
 ```

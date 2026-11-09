@@ -47,7 +47,16 @@ def dataset_counts(db_path, trade_date):
             """,
             (trade_date,),
         ).fetchone()[0]
-    return price_count, delivery_count
+        try:
+            benchmark_count = conn.execute(
+                "SELECT COUNT(*) FROM benchmark_prices WHERE index_code = 'NIFTY 500' AND trade_date = ?",
+                (trade_date,),
+            ).fetchone()[0]
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            benchmark_count = 0
+    return price_count, delivery_count, benchmark_count
 
 
 def latest_complete_date(db_path):
@@ -62,6 +71,12 @@ def latest_complete_date(db_path):
                 SELECT 1
                 FROM daily_delivery AS delivery
                 WHERE delivery.trade_date = prices.trade_date
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM benchmark_prices AS benchmark
+                WHERE benchmark.index_code = 'NIFTY 500'
+                  AND benchmark.trade_date = prices.trade_date
               )
             """
         ).fetchone()
@@ -83,7 +98,7 @@ def run(command):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Import missing NSE prices and delivery data, validate them, and run EOD analysis."
+        description="Import missing NSE prices, delivery, and index data, then run EOD analysis."
     )
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument(
@@ -138,8 +153,8 @@ def main():
     unavailable_dates = []
     for target in targets:
         trade_date = target.isoformat()
-        price_count, delivery_count = dataset_counts(db_path, trade_date)
-        was_complete = bool(price_count and delivery_count)
+        price_count, delivery_count, benchmark_count = dataset_counts(db_path, trade_date)
+        was_complete = bool(price_count and delivery_count and benchmark_count)
         if not was_complete:
             run(
                 [
@@ -148,23 +163,23 @@ def main():
                     "--exchange",
                     "NSE",
                     "--dataset",
-                    "both",
+                    "all",
                     "--date",
                     trade_date,
                     "--db",
                     str(db_path),
                 ]
             )
-            price_count, delivery_count = dataset_counts(db_path, trade_date)
+            price_count, delivery_count, benchmark_count = dataset_counts(db_path, trade_date)
 
         print(
             f"\nValidated {trade_date}: {price_count:,} price rows, "
-            f"{delivery_count:,} delivery rows",
+            f"{delivery_count:,} delivery rows, {benchmark_count:,} Nifty 500 rows",
             flush=True,
         )
-        if not price_count or not delivery_count:
+        if not price_count or not delivery_count or not benchmark_count:
             unavailable_dates.append(trade_date)
-            print("Skipping EOD analysis because one or both NSE reports are unavailable.")
+            print("Skipping EOD analysis because price, delivery, or Nifty 500 data is unavailable.")
             continue
 
         if not was_complete:
