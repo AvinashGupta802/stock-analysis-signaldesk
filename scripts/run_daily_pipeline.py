@@ -151,6 +151,18 @@ def main():
     imported_dates = []
     analyzed_dates = []
     unavailable_dates = []
+    run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "import_nse_fundamentals.py"),
+            "--from-date",
+            targets[0].isoformat(),
+            "--to-date",
+            targets[-1].isoformat(),
+            "--db",
+            str(db_path),
+        ]
+    )
     for target in targets:
         trade_date = target.isoformat()
         price_count, delivery_count, benchmark_count = dataset_counts(db_path, trade_date)

@@ -48,6 +48,31 @@ python scripts\import_exchange_bhavcopy.py --exchange NSE --dataset all --date 2
 
 The index report supplies the Nifty 500 history used by benchmark-relative-strength filters.
 
+## NSE Fundamentals
+
+Import financial-result and shareholding XBRL filings published in a date range:
+
+```powershell
+python scripts\import_nse_fundamentals.py --from-date 2026-11-01 --to-date 2026-11-09
+```
+
+Import or repair one company:
+
+```powershell
+python scripts\import_nse_fundamentals.py --symbol RELIANCE --from-date 2026-01-01 --to-date 2026-11-09
+```
+
+The importer stores raw XBRL under `data/raw/nse_fundamentals` and normalizes:
+
+- revenue, PAT, PBT and finance cost;
+- current and non-current debt, equity and capital employed;
+- YoY revenue and PAT growth when the corresponding prior period is available;
+- debt-to-equity and annualized period ROCE;
+- outstanding shares, promoter percentage and public percentage;
+- point-in-time market capitalization through the `daily_market_cap` SQLite view.
+
+Every record retains the NSE broadcast timestamp. Backtests must select only filings whose `available_at` is on or before the signal time. ROCE currently annualizes the filing-period EBIT against current capital employed; it is an analytical estimate, not a company-reported ratio. Financial-sector companies can require sector-specific treatment.
+
 The importer skips weekends and unavailable exchange files. Use `--no-download` to reprocess files already present under `data/raw`. Exchange formats and URLs can change, so verify row counts and the latest date after an import.
 
 ## EOD Workflow
@@ -146,6 +171,7 @@ Run the focused automated checks:
 ```powershell
 python -m unittest scripts/test_weighted_groups.py
 python -m unittest scripts/test_growth_filters.py
+python -m unittest scripts/test_nse_fundamentals.py
 python -m py_compile scripts/server.py scripts/strategy_scoring.py scripts/deep_audit_saved_strategy.py
 node --check app.js
 ```
@@ -162,6 +188,7 @@ The local server blocks direct access to database, source, and output files. How
 - `scripts/server.py` - HTTP API, persistence orchestration, indicators, and analysis
 - `scripts/strategy_scoring.py` - pure weighted rule-group scoring
 - `scripts/import_exchange_bhavcopy.py` - NSE/BSE report download and import
+- `scripts/import_nse_fundamentals.py` - NSE financial and shareholding XBRL import
 - `scripts/run_eod_analysis.py` - saved-strategy EOD runner
 - `scripts/deep_audit_saved_strategy.py` - long-running saved-strategy audit
 - `data/` - SQLite database and raw exchange files

@@ -23,10 +23,11 @@ strategy_scoring.py        SQLite database
 ## Data Flow
 
 1. `import_exchange_bhavcopy.py` downloads or reads exchange reports and upserts instruments, daily prices, delivery data, and benchmark-index closes.
-2. Rules and rule groups are edited in the UI and stored in SQLite.
-3. `run_eod_analysis.py` evaluates the active strategy for a date and stores rule and group results.
-4. The UI requests results for a signal date and stock group. Compatible stored results are returned immediately; changed definitions are evaluated on demand.
-5. Backtest and Stock Lab paths reuse the same rule evaluation and weighted-group scoring semantics.
+2. `import_nse_fundamentals.py` stores raw XBRL and normalizes point-in-time financial and share-capital records.
+3. Rules and rule groups are edited in the UI and stored in SQLite.
+4. `run_eod_analysis.py` evaluates the active strategy for a date and stores rule and group results.
+5. The UI requests results for a signal date and stock group. Compatible stored results are returned immediately; changed definitions are evaluated on demand.
+6. Backtest and Stock Lab paths reuse the same rule evaluation and weighted-group scoring semantics.
 
 ## Strategy Boundaries
 
@@ -47,6 +48,14 @@ Core market-data tables:
 - `instruments`
 - `daily_prices`
 - `daily_delivery`
+- `benchmark_prices`
+
+Fundamental-data tables and views:
+
+- `fundamental_filings`
+- `company_fundamentals`
+- `share_capital_filings`
+- `daily_market_cap`
 
 Application and strategy tables:
 
@@ -62,6 +71,8 @@ Schema creation and lightweight migrations currently run from server/import code
 ## Stored Result Validity
 
 Stored analysis is valid only when its effective inputs match: signal date, stock universe, rule filters and values, group membership, rule weights, and group thresholds. New features that influence a result must be included in the stored-run identity or must force an on-demand calculation.
+
+Fundamental queries must also enforce `available_at <= signal timestamp`. Period-end dates alone are not sufficient because using results before their exchange broadcast creates look-ahead bias.
 
 Do not delete historical analysis merely because a strategy is edited. Treat the old result as belonging to the old strategy definition; versioned strategy snapshots are the preferred long-term design.
 
