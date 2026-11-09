@@ -1,5 +1,6 @@
 data/*.sqlite3
 data/*.sqlite3-*
 data/raw/
+data/backups/
 outputs/
 scripts/__pycache__/

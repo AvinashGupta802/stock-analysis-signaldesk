@@ -56,7 +56,21 @@ Run or repeat a specific trading date:
 python scripts\run_daily_pipeline.py --date 2026-09-25
 ```
 
-If either the price or delivery report has not yet been published, the command stops before analysis and can safely be retried later.
+Import every missing weekday after the latest complete database date and run EOD analysis in order:
+
+```powershell
+python scripts\run_daily_pipeline.py --catch-up
+```
+
+Or provide an explicit recovery range:
+
+```powershell
+python scripts\run_daily_pipeline.py --start-date 2026-10-20 --end-date 2026-11-06
+```
+
+Complete dates with existing EOD results are skipped. Exchange holidays and unpublished reports are reported and skipped without analyzing incomplete data.
+
+If either the price or delivery report has not yet been published, that date is not analyzed and can safely be retried later.
 
 After importing a trading day, evaluate every active saved rule and rule group and persist the results:
 
