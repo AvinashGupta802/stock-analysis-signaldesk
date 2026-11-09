@@ -15,6 +15,56 @@ DB_PATH = ROOT / "data" / "stock_analysis_exchange.sqlite3"
 
 FILTER_LIBRARY = [
     {
+        "id": "market_cap_range",
+        "name": "Market Capitalization",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose point-in-time market capitalization is within your chosen rupee-crore range.",
+        "fields": [
+            {"key": "minMarketCapCr", "label": "Min market cap cr", "default": 500, "step": 100},
+            {"key": "maxMarketCapCr", "label": "Max market cap cr", "default": 99999999, "step": 100},
+        ],
+    },
+    {
+        "id": "revenue_growth_yoy",
+        "name": "Revenue Growth YoY",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose latest available quarterly revenue grew within your chosen range versus the corresponding prior-year quarter.",
+        "fields": [
+            {"key": "minRevenueGrowthYoY", "label": "Min revenue growth %", "default": 15, "step": 1},
+            {"key": "maxRevenueGrowthYoY", "label": "Max revenue growth %", "default": 999, "step": 1},
+        ],
+    },
+    {
+        "id": "pat_growth_yoy",
+        "name": "PAT Growth YoY",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose latest available profit after tax grew within your chosen range versus the corresponding prior-year quarter.",
+        "fields": [
+            {"key": "minPatGrowthYoY", "label": "Min PAT growth %", "default": 20, "step": 1},
+            {"key": "maxPatGrowthYoY", "label": "Max PAT growth %", "default": 999, "step": 1},
+        ],
+    },
+    {
+        "id": "roce_range",
+        "name": "ROCE",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose estimated annualized return on capital employed is within your chosen percentage range.",
+        "fields": [
+            {"key": "minRoce", "label": "Min ROCE %", "default": 15, "step": 1},
+            {"key": "maxRoce", "label": "Max ROCE %", "default": 999, "step": 1},
+        ],
+    },
+    {
+        "id": "debt_to_equity_range",
+        "name": "Debt to Equity",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose latest available total debt divided by equity is within your chosen range.",
+        "fields": [
+            {"key": "minDebtToEquity", "label": "Min debt to equity", "default": 0, "step": 0.1},
+            {"key": "maxDebtToEquity", "label": "Max debt to equity", "default": 1.2, "step": 0.1},
+        ],
+    },
+    {
         "id": "price_range",
         "name": "Price Range",
         "category": "Universe",
@@ -325,6 +375,40 @@ DEFAULT_RULE = {
         {"id": "price_range", "values": {"minPrice": 100, "maxPrice": 500}},
     ],
 }
+
+FUNDAMENTAL_SYSTEM_RULES = [
+    {
+        "id": "rule_early_volume_signs",
+        "name": "Early Volume Signs",
+        "description": "Mid-cap participation acceleration with positive one-week price momentum.",
+        "filters": [
+            {"id": "market_cap_range", "values": {"minMarketCapCr": 2000, "maxMarketCapCr": 50000}},
+            {"id": "volume_sma10_vs_sma20", "values": {"minVolumeSmaRatio": 1.3, "maxVolumeSmaRatio": 999}},
+            {"id": "multi_period_momentum", "values": {
+                "useMomentum1W": True, "minMomentum1W": 2, "maxMomentum1W": 999,
+                "useMomentum15D": False, "useMomentum1M": False, "useMomentum3M": False,
+                "useMomentum6M": False, "useMomentum1Y": False, "useMomentum6MTo12M": False,
+            }},
+        ],
+    },
+    {
+        "id": "rule_early_growth_relative_strength",
+        "name": "Early Growth & Relative Strength",
+        "description": "Fundamental growth and quality confirmed by long-term trend and Nifty 500 outperformance.",
+        "filters": [
+            {"id": "market_cap_range", "values": {"minMarketCapCr": 500, "maxMarketCapCr": 99999999}},
+            {"id": "revenue_growth_yoy", "values": {"minRevenueGrowthYoY": 15, "maxRevenueGrowthYoY": 999}},
+            {"id": "pat_growth_yoy", "values": {"minPatGrowthYoY": 20, "maxPatGrowthYoY": 999}},
+            {"id": "roce_range", "values": {"minRoce": 15, "maxRoce": 999}},
+            {"id": "debt_to_equity_range", "values": {"minDebtToEquity": 0, "maxDebtToEquity": 1.2}},
+            {"id": "close_above_sma50", "values": {"minCloseVsSma50Pct": 0}},
+            {"id": "sma50_above_sma200", "values": {"minSma50VsSma200Pct": 0}},
+            {"id": "distance_from_52w_high", "values": {"minDistanceFrom52WHigh": 0, "maxDistanceFrom52WHigh": 15}},
+            {"id": "rsi14_range", "values": {"rsiMin": 55, "rsiMax": 100}},
+            {"id": "relative_strength_nifty500_3m", "values": {"minRelativeStrengthNifty5003M": 5, "maxRelativeStrengthNifty5003M": 999}},
+        ],
+    },
+]
 
 BUILTIN_GROUPS = [
     {"id": "all", "name": "All NSE Stocks", "description": "NSE EQ company stocks only; ETFs and funds are excluded.", "kind": "system"},
@@ -1087,7 +1171,7 @@ def get_stock_lab(payload):
         row = rows[index]
         if row["trade_date"] < from_date or row["trade_date"] > to_date:
             continue
-        ctx = build_backtest_context(rows, indicators, index)
+        ctx = enrich_fundamental_context(build_backtest_context(rows, indicators, index), stock["symbol"])
         forward = forward_returns(rows, index, [2, 5, 10, 15])
         outcome = simulate_single_trade(rows, index, target_pct, stop_pct, max_hold_days)
         lab_context = {
@@ -1216,7 +1300,7 @@ def backtest_rule(payload):
                 row = rows[index]
                 if row["trade_date"] < from_date or row["trade_date"] > to_date:
                     continue
-                ctx = build_backtest_context(rows, indicators, index)
+                ctx = enrich_fundamental_context(build_backtest_context(rows, indicators, index), stock["symbol"])
                 if not apply_universe_filters(ctx, universe_filters)[0]:
                     continue
                 passed, reasons = apply_rule(ctx, rule)
@@ -1283,7 +1367,7 @@ def backtest_rule_group(payload):
                 row = rows[index]
                 if row["trade_date"] < from_date or row["trade_date"] > to_date:
                     continue
-                ctx = build_backtest_context(rows, indicators, index)
+                ctx = enrich_fundamental_context(build_backtest_context(rows, indicators, index), stock["symbol"])
                 if not apply_universe_filters(ctx, universe_filters)[0]:
                     continue
                 matched_rules = []
@@ -1352,7 +1436,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters=None)
     series = [dict(row) for row in reversed(rows)]
     if series[-1]["trade_date"] != trade_date:
         return {"passed": False}
-    ctx = build_context(series, len(series) - 1)
+    ctx = enrich_fundamental_context(build_context(series, len(series) - 1), stock["symbol"])
     universe_passed, universe_reasons = apply_universe_filters(ctx, universe_filters)
     if not universe_passed:
         return {"passed": False}
@@ -1442,7 +1526,7 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, scoring, univer
     series = [dict(row) for row in reversed(rows)]
     if series[-1]["trade_date"] != trade_date:
         return {"passed": False}
-    ctx = build_context(series, len(series) - 1)
+    ctx = enrich_fundamental_context(build_context(series, len(series) - 1), stock["symbol"])
     universe_passed, universe_reasons = apply_universe_filters(ctx, universe_filters)
     if not universe_passed:
         return {"passed": False}
@@ -1553,6 +1637,46 @@ def apply_rule(ctx, rule):
 def evaluate_filter(ctx, selected):
     values = selected.get("values") or {}
     filter_id = selected["id"]
+    if filter_id == "market_cap_range":
+        market_cap = ctx.get("market_cap_cr")
+        if market_cap is None:
+            return False, "Market cap is unavailable because no point-in-time share-capital filing is available."
+        min_value = float(values.get("minMarketCapCr", 500))
+        max_value = float(values.get("maxMarketCapCr", 99999999))
+        passed = min_value <= market_cap <= max_value
+        return passed, f"Market cap Rs. {market_cap:,.2f} cr; required Rs. {min_value:,.0f}-{max_value:,.0f} cr."
+    if filter_id == "revenue_growth_yoy":
+        growth = ctx.get("revenue_growth_yoy")
+        if growth is None:
+            return False, "YoY revenue growth is unavailable; current and corresponding prior-year filings are required."
+        min_value = float(values.get("minRevenueGrowthYoY", 15))
+        max_value = float(values.get("maxRevenueGrowthYoY", 999))
+        passed = min_value <= growth <= max_value
+        return passed, f"Revenue growth YoY {growth:+.2f}%; required {min_value:g}%-{max_value:g}%."
+    if filter_id == "pat_growth_yoy":
+        growth = ctx.get("pat_growth_yoy")
+        if growth is None:
+            return False, "YoY PAT growth is unavailable; current and corresponding prior-year filings are required."
+        min_value = float(values.get("minPatGrowthYoY", 20))
+        max_value = float(values.get("maxPatGrowthYoY", 999))
+        passed = min_value <= growth <= max_value
+        return passed, f"PAT growth YoY {growth:+.2f}%; required {min_value:g}%-{max_value:g}%."
+    if filter_id == "roce_range":
+        roce = ctx.get("roce")
+        if roce is None:
+            return False, "ROCE is unavailable from the latest point-in-time financial filing."
+        min_value = float(values.get("minRoce", 15))
+        max_value = float(values.get("maxRoce", 999))
+        passed = min_value <= roce <= max_value
+        return passed, f"Estimated annualized ROCE {roce:.2f}%; required {min_value:g}%-{max_value:g}%."
+    if filter_id == "debt_to_equity_range":
+        ratio = ctx.get("debt_to_equity")
+        if ratio is None or ctx.get("fundamental_equity", 0) <= 0:
+            return False, "Debt-to-equity is unavailable or equity is not positive."
+        min_value = float(values.get("minDebtToEquity", 0))
+        max_value = float(values.get("maxDebtToEquity", 1.2))
+        passed = min_value <= ratio <= max_value
+        return passed, f"Debt-to-equity {ratio:.2f}; required {min_value:g}-{max_value:g}."
     if filter_id == "price_range":
         min_price = float(values.get("minPrice", 100))
         max_price = float(values.get("maxPrice", 500))
@@ -1755,6 +1879,97 @@ def nifty500_momentum_3m(trade_date):
     if len(rows) < 64 or rows[0][0] != trade_date:
         return None
     return pct(rows[0][1], rows[63][1])
+
+
+@lru_cache(maxsize=20000)
+def fundamental_history(symbol):
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        financials = tuple(dict(row) for row in conn.execute(
+            """
+            SELECT period_end, available_at, consolidated, revenue_growth_yoy, pat_growth_yoy,
+                   debt_to_equity, roce, equity
+            FROM company_fundamentals WHERE symbol = ? ORDER BY available_at
+            """,
+            (symbol,),
+        ))
+        shares = tuple(dict(row) for row in conn.execute(
+            """
+            SELECT outstanding_shares, as_of_date, available_at
+            FROM share_capital_filings
+            WHERE symbol = ? AND outstanding_shares IS NOT NULL
+            ORDER BY available_at
+            """,
+            (symbol,),
+        ))
+    except sqlite3.OperationalError:
+        return (), ()
+    finally:
+        if conn is not None:
+            conn.close()
+    return financials, shares
+
+
+@lru_cache(maxsize=100000)
+def point_in_time_fundamentals(symbol, trade_date):
+    empty = {
+        "fundamental_period_end": None,
+        "fundamental_available_at": None,
+        "revenue_growth_yoy": None,
+        "pat_growth_yoy": None,
+        "debt_to_equity": None,
+        "roce": None,
+        "fundamental_equity": None,
+        "outstanding_shares": None,
+        "market_cap_shares_as_of": None,
+    }
+    financial_history, share_history = fundamental_history(symbol)
+    cutoff = trade_date + " 23:59:59"
+    available_financials = [row for row in financial_history if row["available_at"] <= cutoff]
+    financial = max(
+        available_financials,
+        key=lambda row: (
+            row["period_end"],
+            1 if str(row.get("consolidated") or "").lower() == "consolidated" else 0,
+            row["available_at"],
+        ),
+        default=None,
+    )
+    shares = max(
+        (row for row in share_history if row["available_at"] <= cutoff),
+        key=lambda row: row["available_at"],
+        default=None,
+    )
+    result = dict(empty)
+    if financial:
+        result.update({
+            "fundamental_period_end": financial["period_end"],
+            "fundamental_available_at": financial["available_at"],
+            "revenue_growth_yoy": financial["revenue_growth_yoy"],
+            "pat_growth_yoy": financial["pat_growth_yoy"],
+            "debt_to_equity": financial["debt_to_equity"],
+            "roce": financial["roce"],
+            "fundamental_equity": financial["equity"],
+        })
+    if shares:
+        result["outstanding_shares"] = shares["outstanding_shares"]
+        result["market_cap_shares_as_of"] = shares["as_of_date"]
+    return result
+
+
+def enrich_fundamental_context(ctx, symbol):
+    values = point_in_time_fundamentals(symbol, ctx["date"]) if symbol else {
+        "fundamental_period_end": None, "fundamental_available_at": None,
+        "revenue_growth_yoy": None, "pat_growth_yoy": None, "debt_to_equity": None,
+        "roce": None, "fundamental_equity": None, "outstanding_shares": None,
+        "market_cap_shares_as_of": None,
+    }
+    ctx.update(values)
+    shares = values.get("outstanding_shares")
+    ctx["market_cap_cr"] = (ctx["close"] * shares / 10_000_000) if shares else None
+    return ctx
 
 
 def build_context(rows, index):
@@ -2431,6 +2646,20 @@ def ensure_strategy_schema(conn):
     if "rule_weights_json" not in columns:
         conn.execute("ALTER TABLE strategy_rule_groups ADD COLUMN rule_weights_json TEXT NOT NULL DEFAULT '{}'")
     migrate_legacy_strategy(conn)
+    ensure_fundamental_system_rules(conn)
+
+
+def ensure_fundamental_system_rules(conn):
+    for rule in FUNDAMENTAL_SYSTEM_RULES:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO strategy_rules (
+              rule_id, name, description, kind, status, version, filters_json, created_at, updated_at
+            ) VALUES (?, ?, ?, 'system', 'active', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (rule["id"], rule["name"], rule["description"], json.dumps(rule["filters"])),
+        )
+    conn.commit()
 
 
 def load_strategy(conn):
@@ -2736,7 +2965,7 @@ def store_rule_daily_results(conn, trade_date, rules):
                 )
                 stored += 1
             continue
-        ctx = build_context(rows, index)
+        ctx = enrich_fundamental_context(build_context(rows, index), stock["symbol"])
         next_row = rows[index + 1] if index + 1 < len(rows) else None
         for rule in rules:
             passed, reasons = apply_rule(ctx, rule)

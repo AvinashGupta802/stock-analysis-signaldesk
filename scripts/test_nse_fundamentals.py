@@ -1,5 +1,6 @@
 import sqlite3
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import import_nse_fundamentals as fundamentals
+from run_daily_pipeline import analysis_is_complete, fundamental_poll_start
 
 
 FINANCIAL_XML = b"""<?xml version="1.0"?>
@@ -99,6 +101,46 @@ class FundamentalsImporterTests(unittest.TestCase):
             fundamentals.parse_nse_datetime("21-OCT-2026 16:25:15"),
             "2026-10-21 16:25:15",
         )
+
+    def test_daily_poll_uses_overlap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.sqlite3"
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute("CREATE TABLE fundamental_filings (available_at TEXT)")
+                conn.execute("INSERT INTO fundamental_filings VALUES ('2026-11-09 10:00:00')")
+                conn.commit()
+            finally:
+                conn.close()
+            self.assertEqual(fundamental_poll_start(path, fundamentals.date(2026, 1, 1)), fundamentals.date(2026, 11, 2))
+
+    def test_analysis_completeness_requires_every_active_rule_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.sqlite3"
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute(
+                    "CREATE TABLE strategy_rules (rule_id TEXT, version INTEGER, status TEXT)"
+                )
+                conn.execute(
+                    "CREATE TABLE rule_daily_results (rule_id TEXT, rule_version INTEGER, trade_date TEXT)"
+                )
+                conn.executemany(
+                    "INSERT INTO strategy_rules VALUES (?, ?, 'active')",
+                    [("rule_one", 1), ("rule_two", 2)],
+                )
+                conn.execute(
+                    "INSERT INTO rule_daily_results VALUES ('rule_one', 1, '2026-11-06')"
+                )
+                conn.commit()
+                self.assertFalse(analysis_is_complete(path, "2026-11-06"))
+                conn.execute(
+                    "INSERT INTO rule_daily_results VALUES ('rule_two', 2, '2026-11-06')"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            self.assertTrue(analysis_is_complete(path, "2026-11-06"))
 
 
 if __name__ == "__main__":

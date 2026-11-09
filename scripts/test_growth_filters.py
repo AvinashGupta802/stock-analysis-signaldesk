@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from import_exchange_bhavcopy import parse_date
-from server import FILTER_LIBRARY, evaluate_filter
+from server import FILTER_LIBRARY, FUNDAMENTAL_SYSTEM_RULES, evaluate_filter
 
 
 class GrowthFilterTests(unittest.TestCase):
@@ -19,6 +19,12 @@ class GrowthFilterTests(unittest.TestCase):
             "volume_sma10_vs_sma20": 1.4,
             "distance_from_52w_high": 10.0,
             "relative_strength_nifty500_3m": 6.0,
+            "market_cap_cr": 10000.0,
+            "revenue_growth_yoy": 20.0,
+            "pat_growth_yoy": 25.0,
+            "roce": 18.0,
+            "debt_to_equity": 0.5,
+            "fundamental_equity": 1000.0,
         }
 
     def test_all_new_filters_are_in_library(self):
@@ -35,6 +41,38 @@ class GrowthFilterTests(unittest.TestCase):
 
     def test_nse_index_date_format(self):
         self.assertEqual(parse_date("19-10-2026"), "2026-10-19")
+
+    def test_fundamental_filters_and_rules_are_registered(self):
+        filter_ids = {item["id"] for item in FILTER_LIBRARY}
+        self.assertTrue(
+            {
+                "market_cap_range",
+                "revenue_growth_yoy",
+                "pat_growth_yoy",
+                "roce_range",
+                "debt_to_equity_range",
+            }.issubset(filter_ids)
+        )
+        self.assertEqual(
+            {rule["id"] for rule in FUNDAMENTAL_SYSTEM_RULES},
+            {"rule_early_volume_signs", "rule_early_growth_relative_strength"},
+        )
+
+    def test_fundamental_filters_pass_valid_values(self):
+        selections = [
+            {"id": "market_cap_range", "values": {"minMarketCapCr": 2000, "maxMarketCapCr": 50000}},
+            {"id": "revenue_growth_yoy", "values": {"minRevenueGrowthYoY": 15}},
+            {"id": "pat_growth_yoy", "values": {"minPatGrowthYoY": 20}},
+            {"id": "roce_range", "values": {"minRoce": 15}},
+            {"id": "debt_to_equity_range", "values": {"maxDebtToEquity": 1.2}},
+        ]
+        self.assertTrue(all(evaluate_filter(self.context, selected)[0] for selected in selections))
+
+    def test_missing_fundamentals_fail_with_explanation(self):
+        context = dict(self.context, revenue_growth_yoy=None)
+        passed, reason = evaluate_filter(context, {"id": "revenue_growth_yoy", "values": {}})
+        self.assertFalse(passed)
+        self.assertIn("unavailable", reason)
 
     def test_volume_average_acceleration(self):
         passed, _ = evaluate_filter(

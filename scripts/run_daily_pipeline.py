@@ -83,12 +83,42 @@ def latest_complete_date(db_path):
     return date.fromisoformat(row[0]) if row and row[0] else None
 
 
-def analysis_result_count(db_path, trade_date):
-    with sqlite3.connect(db_path) as conn:
-        return conn.execute(
-            "SELECT COUNT(*) FROM rule_daily_results WHERE trade_date = ?",
+def analysis_is_complete(db_path, trade_date):
+    conn = sqlite3.connect(db_path)
+    try:
+        expected = conn.execute(
+            "SELECT COUNT(*) FROM strategy_rules WHERE status = 'active'"
+        ).fetchone()[0]
+        stored = conn.execute(
+            """
+            SELECT COUNT(DISTINCT rules.rule_id)
+            FROM strategy_rules AS rules
+            JOIN rule_daily_results AS results
+              ON results.rule_id = rules.rule_id
+             AND results.rule_version = rules.version
+             AND results.trade_date = ?
+            WHERE rules.status = 'active'
+            """,
             (trade_date,),
         ).fetchone()[0]
+    finally:
+        conn.close()
+    return expected > 0 and stored == expected
+
+
+def fundamental_poll_start(db_path, fallback_date):
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        row = conn.execute("SELECT MAX(DATE(available_at)) FROM fundamental_filings").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    finally:
+        if conn is not None:
+            conn.close()
+    if row and row[0]:
+        return date.fromisoformat(row[0]) - timedelta(days=7)
+    return max(fallback_date, date.today() - timedelta(days=7))
 
 
 def run(command):
@@ -151,14 +181,15 @@ def main():
     imported_dates = []
     analyzed_dates = []
     unavailable_dates = []
+    fundamentals_from = fundamental_poll_start(db_path, targets[0])
     run(
         [
             sys.executable,
             str(ROOT / "scripts" / "import_nse_fundamentals.py"),
             "--from-date",
-            targets[0].isoformat(),
+            fundamentals_from.isoformat(),
             "--to-date",
-            targets[-1].isoformat(),
+            date.today().isoformat(),
             "--db",
             str(db_path),
         ]
@@ -196,7 +227,7 @@ def main():
 
         if not was_complete:
             imported_dates.append(trade_date)
-        if not was_complete or not analysis_result_count(db_path, trade_date):
+        if not was_complete or not analysis_is_complete(db_path, trade_date):
             run(
                 [
                     sys.executable,

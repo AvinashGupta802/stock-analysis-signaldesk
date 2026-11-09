@@ -8,6 +8,7 @@ from server import (
     build_backtest_context,
     build_indicators,
     connect,
+    enrich_fundamental_context,
     load_group_stocks,
     load_rows,
     simulate_trades,
@@ -204,7 +205,7 @@ def build_rule_candidates(group_id, from_date, to_date, rules, max_hold_days):
                 row = rows[index]
                 if row["trade_date"] < from_date or row["trade_date"] > to_date:
                     continue
-                ctx = build_backtest_context(rows, indicators, index)
+                ctx = enrich_fundamental_context(build_backtest_context(rows, indicators, index), stock["symbol"])
                 for rule_item in rules:
                     passed, _ = apply_rule(ctx, rule_item)
                     if passed:

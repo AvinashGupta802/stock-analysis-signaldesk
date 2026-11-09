@@ -9,6 +9,7 @@ from server import (
     build_backtest_context,
     build_indicators,
     connect,
+    enrich_fundamental_context,
     load_group_stocks,
     load_rows,
     pct,
@@ -124,7 +125,7 @@ def build_records(group_id, from_date, to_date, max_hold):
                 row = rows[index]
                 if row["trade_date"] < from_date or row["trade_date"] > to_date:
                     continue
-                ctx = build_backtest_context(rows, indicators, index)
+                ctx = enrich_fundamental_context(build_backtest_context(rows, indicators, index), stock["symbol"])
                 records.append({
                     "id": len(records),
                     "symbol": stock["symbol"],

@@ -9,6 +9,7 @@ from server import (
     build_backtest_context,
     build_indicators,
     connect,
+    enrich_fundamental_context,
     load_group_stocks,
     load_rows,
     load_strategy,
@@ -163,7 +164,7 @@ def build_picks(universe, from_date, to_date, max_hold, rules, groups):
                 signal_date = row["trade_date"]
                 if signal_date < from_date or signal_date > to_date:
                     continue
-                ctx = build_backtest_context(rows, indicators, index)
+                ctx = enrich_fundamental_context(build_backtest_context(rows, indicators, index), stock["symbol"])
                 passed_rule_ids = set()
                 for rule in rules:
                     passed, _ = apply_rule(ctx, rule)

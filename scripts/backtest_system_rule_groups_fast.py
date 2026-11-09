@@ -8,6 +8,7 @@ from server import (
     build_backtest_context,
     build_indicators,
     connect,
+    enrich_fundamental_context,
     load_group_stocks,
     load_rows,
     simulate_trades,
@@ -94,7 +95,7 @@ def build_group_picks(universe):
                 row = rows[index]
                 if row["trade_date"] < FROM_DATE or row["trade_date"] > TO_DATE:
                     continue
-                ctx = build_backtest_context(rows, indicators, index)
+                ctx = enrich_fundamental_context(build_backtest_context(rows, indicators, index), stock["symbol"])
                 rule_passes = {}
                 for rule_id, rule in RULE_BY_ID.items():
                     passed, reasons = apply_rule(ctx, rule)

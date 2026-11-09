@@ -136,6 +136,13 @@ Price range is a universe-level filter. It can be applied to a run independently
 
 The filter library also includes volume SMA10 versus SMA20, distance from the 52-week high, close versus SMA50, SMA50 versus SMA200, and three-month excess return versus the official Nifty 500 close series. Long-lookback filters reject stocks without enough history instead of calculating shortened substitutes.
 
+Two system rules reproduce the referenced scans:
+
+- `Early Volume Signs`: market cap Rs. 2,000-50,000 crore, volume SMA10 at least 1.3x SMA20, and one-week return at least 2%.
+- `Early Growth & Relative Strength`: market cap at least Rs. 500 crore, revenue growth at least 15%, PAT growth at least 20%, ROCE at least 15%, debt-to-equity at most 1.2, close above SMA50, SMA50 above SMA200, within 15% of the 52-week high, RSI at least 55, and three-month outperformance versus Nifty 500 of at least 5 percentage points.
+
+Fundamental conditions use only filings broadcast by the signal date. Until historical financial and shareholding XBRL is backfilled, these rules will intentionally return limited or no historical matches rather than use future information.
+
 ## Backtesting
 
 Run the saved-strategy deep audit without changing strategy definitions in SQLite:
