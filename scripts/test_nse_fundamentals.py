@@ -142,6 +142,32 @@ class FundamentalsImporterTests(unittest.TestCase):
                 conn.close()
             self.assertTrue(analysis_is_complete(path, "2026-11-06"))
 
+    def test_missing_shareholding_selects_latest_uncovered_symbol(self):
+        self.conn.execute(
+            "INSERT INTO share_capital_filings VALUES ('SHP-1', 'COVERED', '2026-09-30', '2026-10-10 10:00:00', 100, NULL, NULL)"
+        )
+        records = [
+            {"symbol": "COVERED", "broadcastDate": "11-OCT-2026 10:00:00"},
+            {"symbol": "MISSING", "broadcastDate": "10-OCT-2026 10:00:00"},
+            {"symbol": "MISSING", "broadcastDate": "12-OCT-2026 10:00:00"},
+        ]
+        selected = fundamentals.missing_latest_shareholding_filings(self.conn, records)
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["symbol"], "MISSING")
+        self.assertEqual(selected[0]["broadcastDate"], "12-OCT-2026 10:00:00")
+
+    def test_filing_symbol_is_canonicalized_by_isin(self):
+        self.conn.execute(
+            "CREATE TABLE instruments (exchange TEXT, series TEXT, isin TEXT, symbol TEXT)"
+        )
+        self.conn.execute(
+            "INSERT INTO instruments VALUES ('NSE', 'EQ', 'INE917I01010', 'BAJAJAUTO')"
+        )
+        records = [{"symbol": "BAJAJ-AUTO", "isin": "INE917I01010"}]
+        normalized = fundamentals.canonicalize_record_symbols(self.conn, records)
+        self.assertEqual(normalized[0]["symbol"], "BAJAJAUTO")
+        self.assertEqual(records[0]["symbol"], "BAJAJ-AUTO")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,6 +133,11 @@ def main():
     parser.add_argument("--symbol", help="Optional NSE symbol.")
     parser.add_argument("--financial-only", action="store_true")
     parser.add_argument("--shareholding-only", action="store_true")
+    parser.add_argument(
+        "--missing-share-counts-only",
+        action="store_true",
+        help="Import only the latest shareholding filing for symbols without a usable share count.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Maximum filings per feed; zero means all.")
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR))
@@ -141,6 +146,8 @@ def main():
 
     if args.financial_only and args.shareholding_only:
         raise SystemExit("Choose at most one of --financial-only and --shareholding-only.")
+    if args.missing_share_counts_only and not args.shareholding_only:
+        raise SystemExit("--missing-share-counts-only requires --shareholding-only.")
     today = date.today()
     from_date = date.fromisoformat(args.from_date) if args.from_date else today - timedelta(days=1)
     to_date = date.fromisoformat(args.to_date) if args.to_date else today
@@ -157,9 +164,13 @@ def main():
 
     if not args.shareholding_only:
         filings = fetch_financial_filings(opener, from_date, to_date, args.symbol)
+        filings = canonicalize_record_symbols(conn, filings)
         import_filings(conn, opener, raw_dir, filings, "financial", args.limit, args.sleep, totals)
     if not args.financial_only:
         filings = fetch_shareholding_filings(opener, from_date, to_date, args.symbol)
+        filings = canonicalize_record_symbols(conn, filings)
+        if args.missing_share_counts_only:
+            filings = missing_latest_shareholding_filings(conn, filings)
         import_filings(conn, opener, raw_dir, filings, "shareholding", args.limit, args.sleep, totals)
 
     refresh_all_growth(conn)
@@ -235,6 +246,45 @@ def fetch_shareholding_filings(opener, from_date, to_date, symbol=None):
         if from_date <= available_date <= to_date:
             filtered.append(record)
     return filtered
+
+
+def missing_latest_shareholding_filings(conn, records):
+    covered = {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT symbol FROM share_capital_filings WHERE outstanding_shares IS NOT NULL"
+        )
+    }
+    latest = {}
+    for record in records:
+        symbol = str(record.get("symbol") or "").strip().upper()
+        if not symbol or symbol in covered:
+            continue
+        available_at = filing_available_at(record, "shareholding") or ""
+        if symbol not in latest or available_at > latest[symbol][0]:
+            latest[symbol] = (available_at, record)
+    return [item[1] for item in sorted(latest.values(), key=lambda item: item[0], reverse=True)]
+
+
+def canonicalize_record_symbols(conn, records):
+    isin_symbols = {
+        row[0]: row[1]
+        for row in conn.execute(
+            """
+            SELECT isin, symbol
+            FROM instruments
+            WHERE exchange = 'NSE' AND series = 'EQ' AND isin IS NOT NULL AND isin != ''
+            """
+        )
+    }
+    normalized = []
+    for record in records:
+        item = dict(record)
+        canonical = isin_symbols.get(str(item.get("isin") or "").strip().upper())
+        if canonical:
+            item["symbol"] = canonical
+        normalized.append(item)
+    return normalized
 
 
 def import_filings(conn, opener, raw_dir, records, filing_type, limit, sleep_seconds, totals):

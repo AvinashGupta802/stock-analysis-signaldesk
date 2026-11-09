@@ -62,6 +62,14 @@ Import or repair one company:
 python scripts\import_nse_fundamentals.py --symbol RELIANCE --from-date 2026-01-01 --to-date 2026-11-09
 ```
 
+Recover missing outstanding-share counts without downloading every historical revision:
+
+```powershell
+python scripts\import_nse_fundamentals.py --from-date 2024-07-08 --to-date 2026-11-10 --shareholding-only --missing-share-counts-only
+```
+
+The recovery mode selects the latest filing for each symbol still missing a usable share count. Filing symbols are matched to bhavcopy instruments by ISIN, handling differences such as `BAJAJ-AUTO` versus `BAJAJAUTO`.
+
 The importer stores raw XBRL under `data/raw/nse_fundamentals` and normalizes:
 
 - revenue, PAT, PBT and finance cost;
