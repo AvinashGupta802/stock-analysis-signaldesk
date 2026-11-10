@@ -168,6 +168,15 @@ class FundamentalsImporterTests(unittest.TestCase):
         self.assertEqual(normalized[0]["symbol"], "BAJAJAUTO")
         self.assertEqual(records[0]["symbol"], "BAJAJ-AUTO")
 
+    def test_growth_pair_selects_latest_period_and_prior_year(self):
+        records = [
+            {"symbol": "TEST", "qe_Date": "30-SEP-2025", "broadcast_Date": "01-NOV-2025 10:00:00", "seq_Id": "1"},
+            {"symbol": "TEST", "qe_Date": "30-JUN-2026", "broadcast_Date": "01-AUG-2026 10:00:00", "seq_Id": "2"},
+            {"symbol": "TEST", "qe_Date": "30-SEP-2026", "broadcast_Date": "01-NOV-2026 10:00:00", "seq_Id": "3"},
+        ]
+        selected = fundamentals.latest_growth_pair_filings(records)
+        self.assertEqual({item["seq_Id"] for item in selected}, {"1", "3"})
+
 
 if __name__ == "__main__":
     unittest.main()

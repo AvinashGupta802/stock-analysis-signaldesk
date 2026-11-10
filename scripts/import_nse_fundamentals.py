@@ -138,6 +138,11 @@ def main():
         action="store_true",
         help="Import only the latest shareholding filing for symbols without a usable share count.",
     )
+    parser.add_argument(
+        "--growth-pairs-only",
+        action="store_true",
+        help="Import the latest financial period and matching prior-year period per symbol.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Maximum filings per feed; zero means all.")
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR))
@@ -148,6 +153,8 @@ def main():
         raise SystemExit("Choose at most one of --financial-only and --shareholding-only.")
     if args.missing_share_counts_only and not args.shareholding_only:
         raise SystemExit("--missing-share-counts-only requires --shareholding-only.")
+    if args.growth_pairs_only and args.shareholding_only:
+        raise SystemExit("--growth-pairs-only cannot be used with --shareholding-only.")
     today = date.today()
     from_date = date.fromisoformat(args.from_date) if args.from_date else today - timedelta(days=1)
     to_date = date.fromisoformat(args.to_date) if args.to_date else today
@@ -165,6 +172,8 @@ def main():
     if not args.shareholding_only:
         filings = fetch_financial_filings(opener, from_date, to_date, args.symbol)
         filings = canonicalize_record_symbols(conn, filings)
+        if args.growth_pairs_only:
+            filings = latest_growth_pair_filings(filings)
         import_filings(conn, opener, raw_dir, filings, "financial", args.limit, args.sleep, totals)
     if not args.financial_only:
         filings = fetch_shareholding_filings(opener, from_date, to_date, args.symbol)
@@ -203,10 +212,26 @@ def fetch_json(opener, url):
 
 
 def fetch_financial_filings(opener, from_date, to_date, symbol=None):
+    records = []
+    current = from_date
+    while current <= to_date:
+        records.extend(fetch_financial_filings_for_day(opener, current, symbol))
+        current += timedelta(days=1)
+    unique = {}
+    for record in records:
+        filing_id = filing_identifier(record, "financial")
+        if filing_id:
+            unique[filing_id] = record
+    return list(unique.values())
+
+
+def fetch_financial_filings_for_day(opener, filing_date, symbol=None):
     params = {
         "index": "equities",
-        "from_date": from_date.strftime("%d-%m-%Y"),
-        "to_date": to_date.strftime("%d-%m-%Y"),
+        "from_date": filing_date.strftime("%d-%m-%Y"),
+        "to_date": filing_date.strftime("%d-%m-%Y"),
+        "page": 1,
+        "size": 5000,
     }
     if symbol:
         params["symbol"] = symbol.upper()
@@ -222,6 +247,34 @@ def fetch_financial_filings(opener, from_date, to_date, symbol=None):
         payload = fetch_json(opener, NSE_BASE + "/api/corporates-financial-results?" + urlencode(legacy_params))
         legacy.extend(payload if isinstance(payload, list) else payload.get("data", []))
     return legacy
+
+
+def latest_growth_pair_filings(records):
+    latest_period = {}
+    for record in records:
+        symbol = str(record.get("symbol") or "").strip().upper()
+        period_end = filing_period_end(record, "financial")
+        if symbol and period_end and period_end > latest_period.get(symbol, ""):
+            latest_period[symbol] = period_end
+    targets = {}
+    for symbol, period_end in latest_period.items():
+        current = date.fromisoformat(period_end)
+        try:
+            prior = current.replace(year=current.year - 1).isoformat()
+        except ValueError:
+            prior = current.replace(year=current.year - 1, day=28).isoformat()
+        targets[symbol] = {period_end, prior}
+    selected = {}
+    for record in records:
+        symbol = str(record.get("symbol") or "").strip().upper()
+        period_end = filing_period_end(record, "financial")
+        if period_end not in targets.get(symbol, set()):
+            continue
+        key = (symbol, period_end, str(record.get("consolidated") or ""))
+        available_at = filing_available_at(record, "financial") or ""
+        if key not in selected or available_at > selected[key][0]:
+            selected[key] = (available_at, record)
+    return [item[1] for item in selected.values()]
 
 
 def fetch_shareholding_filings(opener, from_date, to_date, symbol=None):
