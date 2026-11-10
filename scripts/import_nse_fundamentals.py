@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS company_fundamentals (
   capital_employed REAL,
   revenue_growth_yoy REAL,
   pat_growth_yoy REAL,
+  annual_revenue REAL,
+  annual_pat REAL,
+  annual_ebit REAL,
+  annual_revenue_growth_yoy REAL,
+  annual_pat_growth_yoy REAL,
+  annual_roce REAL,
   debt_to_equity REAL,
   roce REAL,
   roce_method TEXT,
@@ -166,6 +172,7 @@ def main():
     raw_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
+    ensure_fundamental_columns(conn)
     opener = nse_opener()
     totals = {"metadata": 0, "downloaded": 0, "parsed": 0, "failed": 0}
 
@@ -194,6 +201,16 @@ def main():
 
 def nse_opener():
     return build_opener(HTTPCookieProcessor(CookieJar()))
+
+
+def ensure_fundamental_columns(conn):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(company_fundamentals)")}
+    for name in (
+        "annual_revenue", "annual_pat", "annual_ebit",
+        "annual_revenue_growth_yoy", "annual_pat_growth_yoy", "annual_roce",
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE company_fundamentals ADD COLUMN {name} REAL")
 
 
 def fetch_json(opener, url):
@@ -453,6 +470,7 @@ def parse_xbrl(content):
 
 def store_financial(conn, filing_id, symbol, record, available_at, period_end, parsed):
     flows = {key: select_flow_fact(parsed["facts"], names, period_end) for key, names in FLOW_CONCEPTS.items()}
+    annual_flows = {key: select_annual_flow_fact(parsed["facts"], names, period_end) for key, names in FLOW_CONCEPTS.items()}
     instants = {key: select_instant_fact(parsed["facts"], names, period_end) for key, names in INSTANT_CONCEPTS.items()}
     period_start = next((fact["context"]["start"] for fact in parsed["facts"] if fact["context"]["end"] == period_end and fact["context"]["start"] and not fact["context"]["has_dimensions"]), None)
     current_debt = instants["current_debt"] or 0
@@ -464,19 +482,26 @@ def store_financial(conn, filing_id, symbol, record, available_at, period_end, p
     debt_to_equity = safe_ratio(total_debt, equity)
     days = (date.fromisoformat(period_end) - date.fromisoformat(period_start)).days + 1 if period_start else None
     roce = safe_ratio(ebit * (365 / days), capital_employed, percent=True) if ebit is not None and capital_employed and days else None
+    annual_ebit = (
+        annual_flows["pbt"] + annual_flows["finance_cost"]
+        if annual_flows["pbt"] is not None and annual_flows["finance_cost"] is not None else None
+    )
+    annual_roce = safe_ratio(annual_ebit, capital_employed, percent=True) if annual_ebit is not None and capital_employed else None
     consolidated = record.get("consolidated")
     conn.execute(
         """
         INSERT OR REPLACE INTO company_fundamentals (
           filing_id, symbol, period_start, period_end, available_at, consolidated,
           revenue, pat, pbt, finance_cost, ebit, current_debt, noncurrent_debt,
-          total_debt, equity, capital_employed, debt_to_equity, roce, roce_method
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          total_debt, equity, capital_employed, debt_to_equity, roce, roce_method,
+          annual_revenue, annual_pat, annual_ebit, annual_roce
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (filing_id, symbol, period_start, period_end, available_at, consolidated,
          flows["revenue"], flows["pat"], flows["pbt"], flows["finance_cost"], ebit,
          current_debt, noncurrent_debt, total_debt, equity, capital_employed,
-         debt_to_equity, roce, "annualized_period_ebit/current_capital" if roce is not None else None),
+         debt_to_equity, roce, "annualized_period_ebit/current_capital" if roce is not None else None,
+         annual_flows["revenue"], annual_flows["pat"], annual_ebit, annual_roce),
     )
     refresh_growth(conn, filing_id, symbol, period_end, consolidated, flows["revenue"], flows["pat"])
 
@@ -526,7 +551,7 @@ def refresh_growth(conn, filing_id, symbol, period_end, consolidated, revenue, p
         prior_date = current_date.replace(year=current_date.year - 1, day=28).isoformat()
     prior = conn.execute(
         """
-        SELECT revenue, pat
+        SELECT revenue, pat, annual_revenue, annual_pat
         FROM company_fundamentals
         WHERE symbol = ? AND period_end = ? AND COALESCE(consolidated, '') = COALESCE(?, '')
         ORDER BY available_at DESC LIMIT 1
@@ -535,9 +560,18 @@ def refresh_growth(conn, filing_id, symbol, period_end, consolidated, revenue, p
     ).fetchone()
     revenue_growth = growth_pct(revenue, prior[0]) if prior else None
     pat_growth = growth_pct(pat, prior[1]) if prior else None
+    current_annual = conn.execute(
+        "SELECT annual_revenue, annual_pat FROM company_fundamentals WHERE filing_id = ?",
+        (filing_id,),
+    ).fetchone()
+    annual_revenue_growth = growth_pct(current_annual[0], prior[2]) if prior and current_annual else None
+    annual_pat_growth = growth_pct(current_annual[1], prior[3]) if prior and current_annual else None
     conn.execute(
-        "UPDATE company_fundamentals SET revenue_growth_yoy = ?, pat_growth_yoy = ? WHERE filing_id = ?",
-        (revenue_growth, pat_growth, filing_id),
+        """UPDATE company_fundamentals
+           SET revenue_growth_yoy = ?, pat_growth_yoy = ?,
+               annual_revenue_growth_yoy = ?, annual_pat_growth_yoy = ?
+           WHERE filing_id = ?""",
+        (revenue_growth, pat_growth, annual_revenue_growth, annual_pat_growth, filing_id),
     )
 
 
@@ -561,6 +595,24 @@ def select_flow_fact(facts, concept_names, period_end):
     if not candidates:
         return None
     candidates.sort(key=lambda fact: date.fromisoformat(period_end) - date.fromisoformat(fact["context"]["start"]))
+    return candidates[0]["number"]
+
+
+def select_annual_flow_fact(facts, concept_names, period_end):
+    candidates = [
+        fact for fact in facts
+        if fact["concept"] in concept_names
+        and fact["number"] is not None
+        and fact["context"]["end"] == period_end
+        and fact["context"]["start"]
+        and not fact["context"]["has_dimensions"]
+        and (date.fromisoformat(period_end) - date.fromisoformat(fact["context"]["start"])).days + 1 >= 300
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda fact: date.fromisoformat(fact["context"]["start"])
+    )
     return candidates[0]["number"]
 
 

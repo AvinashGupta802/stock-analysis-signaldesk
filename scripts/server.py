@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 from collections import defaultdict
+from datetime import date
 from functools import lru_cache
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,7 +27,7 @@ FILTER_LIBRARY = [
     },
     {
         "id": "revenue_growth_yoy",
-        "name": "Revenue Growth YoY",
+        "name": "Quarterly Revenue Growth YoY",
         "category": "Fundamentals",
         "meaning": "Keep stocks whose latest available quarterly revenue grew within your chosen range versus the corresponding prior-year quarter.",
         "fields": [
@@ -36,7 +37,7 @@ FILTER_LIBRARY = [
     },
     {
         "id": "pat_growth_yoy",
-        "name": "PAT Growth YoY",
+        "name": "Quarterly PAT Growth YoY",
         "category": "Fundamentals",
         "meaning": "Keep stocks whose latest available profit after tax grew within your chosen range versus the corresponding prior-year quarter.",
         "fields": [
@@ -46,12 +47,42 @@ FILTER_LIBRARY = [
     },
     {
         "id": "roce_range",
-        "name": "ROCE",
+        "name": "Quarterly Estimated ROCE",
         "category": "Fundamentals",
         "meaning": "Keep stocks whose estimated annualized return on capital employed is within your chosen percentage range.",
         "fields": [
             {"key": "minRoce", "label": "Min ROCE %", "default": 15, "step": 1},
             {"key": "maxRoce", "label": "Max ROCE %", "default": 999, "step": 1},
+        ],
+    },
+    {
+        "id": "annual_revenue_growth_yoy",
+        "name": "Annual Revenue Growth YoY",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose latest available full-year revenue grew within your chosen range versus the preceding financial year.",
+        "fields": [
+            {"key": "minAnnualRevenueGrowthYoY", "label": "Min annual revenue growth %", "default": 15, "step": 1},
+            {"key": "maxAnnualRevenueGrowthYoY", "label": "Max annual revenue growth %", "default": 999, "step": 1},
+        ],
+    },
+    {
+        "id": "annual_pat_growth_yoy",
+        "name": "Annual PAT Growth YoY",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose latest available full-year profit after tax grew within your chosen range versus the preceding financial year.",
+        "fields": [
+            {"key": "minAnnualPatGrowthYoY", "label": "Min annual PAT growth %", "default": 20, "step": 1},
+            {"key": "maxAnnualPatGrowthYoY", "label": "Max annual PAT growth %", "default": 999, "step": 1},
+        ],
+    },
+    {
+        "id": "annual_roce_range",
+        "name": "Annual ROCE",
+        "category": "Fundamentals",
+        "meaning": "Keep stocks whose latest available full-year EBIT divided by capital employed is within your chosen percentage range.",
+        "fields": [
+            {"key": "minAnnualRoce", "label": "Min annual ROCE %", "default": 15, "step": 1},
+            {"key": "maxAnnualRoce", "label": "Max annual ROCE %", "default": 999, "step": 1},
         ],
     },
     {
@@ -393,13 +424,14 @@ FUNDAMENTAL_SYSTEM_RULES = [
     },
     {
         "id": "rule_early_growth_relative_strength",
+        "version": 3,
         "name": "Early Growth & Relative Strength",
         "description": "Fundamental growth and quality confirmed by long-term trend and Nifty 500 outperformance.",
         "filters": [
             {"id": "market_cap_range", "values": {"minMarketCapCr": 500, "maxMarketCapCr": 99999999}},
-            {"id": "revenue_growth_yoy", "values": {"minRevenueGrowthYoY": 15, "maxRevenueGrowthYoY": 999}},
-            {"id": "pat_growth_yoy", "values": {"minPatGrowthYoY": 20, "maxPatGrowthYoY": 999}},
-            {"id": "roce_range", "values": {"minRoce": 15, "maxRoce": 999}},
+            {"id": "annual_revenue_growth_yoy", "values": {"minAnnualRevenueGrowthYoY": 15, "maxAnnualRevenueGrowthYoY": 999}},
+            {"id": "annual_pat_growth_yoy", "values": {"minAnnualPatGrowthYoY": 20, "maxAnnualPatGrowthYoY": 999}},
+            {"id": "annual_roce_range", "values": {"minAnnualRoce": 15, "maxAnnualRoce": 999}},
             {"id": "debt_to_equity_range", "values": {"minDebtToEquity": 0, "maxDebtToEquity": 1.2}},
             {"id": "close_above_sma50", "values": {"minCloseVsSma50Pct": 0}},
             {"id": "sma50_above_sma200", "values": {"minSma50VsSma200Pct": 0}},
@@ -1668,7 +1700,31 @@ def evaluate_filter(ctx, selected):
         min_value = float(values.get("minRoce", 15))
         max_value = float(values.get("maxRoce", 999))
         passed = min_value <= roce <= max_value
-        return passed, f"Estimated annualized ROCE {roce:.2f}%; required {min_value:g}%-{max_value:g}%."
+        return passed, f"Quarterly estimated annualized ROCE {roce:.2f}%; required {min_value:g}%-{max_value:g}%."
+    if filter_id == "annual_revenue_growth_yoy":
+        growth = ctx.get("annual_revenue_growth_yoy")
+        if growth is None:
+            return False, "Annual revenue growth is unavailable; two corresponding full-year filings are required."
+        min_value = float(values.get("minAnnualRevenueGrowthYoY", 15))
+        max_value = float(values.get("maxAnnualRevenueGrowthYoY", 999))
+        passed = min_value <= growth <= max_value
+        return passed, f"Annual revenue growth YoY {growth:+.2f}%; required {min_value:g}%-{max_value:g}%."
+    if filter_id == "annual_pat_growth_yoy":
+        growth = ctx.get("annual_pat_growth_yoy")
+        if growth is None:
+            return False, "Annual PAT growth is unavailable; two corresponding full-year filings are required."
+        min_value = float(values.get("minAnnualPatGrowthYoY", 20))
+        max_value = float(values.get("maxAnnualPatGrowthYoY", 999))
+        passed = min_value <= growth <= max_value
+        return passed, f"Annual PAT growth YoY {growth:+.2f}%; required {min_value:g}%-{max_value:g}%."
+    if filter_id == "annual_roce_range":
+        roce = ctx.get("annual_roce")
+        if roce is None:
+            return False, "Annual ROCE is unavailable from the latest full-year filing."
+        min_value = float(values.get("minAnnualRoce", 15))
+        max_value = float(values.get("maxAnnualRoce", 999))
+        passed = min_value <= roce <= max_value
+        return passed, f"Annual ROCE {roce:.2f}%; required {min_value:g}%-{max_value:g}%."
     if filter_id == "debt_to_equity_range":
         ratio = ctx.get("debt_to_equity")
         if ratio is None or ctx.get("fundamental_equity", 0) <= 0:
@@ -1889,8 +1945,9 @@ def fundamental_history(symbol):
         conn.row_factory = sqlite3.Row
         financials = tuple(dict(row) for row in conn.execute(
             """
-            SELECT period_end, available_at, consolidated, revenue_growth_yoy, pat_growth_yoy,
-                   debt_to_equity, roce, equity
+            SELECT period_start, period_end, available_at, consolidated, revenue_growth_yoy, pat_growth_yoy,
+                   debt_to_equity, roce, equity, annual_revenue, annual_pat,
+                   annual_revenue_growth_yoy, annual_pat_growth_yoy, annual_roce
             FROM company_fundamentals WHERE symbol = ? ORDER BY available_at
             """,
             (symbol,),
@@ -1921,6 +1978,11 @@ def point_in_time_fundamentals(symbol, trade_date):
         "pat_growth_yoy": None,
         "debt_to_equity": None,
         "roce": None,
+        "annual_period_end": None,
+        "annual_available_at": None,
+        "annual_revenue_growth_yoy": None,
+        "annual_pat_growth_yoy": None,
+        "annual_roce": None,
         "fundamental_equity": None,
         "outstanding_shares": None,
         "market_cap_shares_as_of": None,
@@ -1928,13 +1990,27 @@ def point_in_time_fundamentals(symbol, trade_date):
     financial_history, share_history = fundamental_history(symbol)
     cutoff = trade_date + " 23:59:59"
     available_financials = [row for row in financial_history if row["available_at"] <= cutoff]
-    financial = max(
-        available_financials,
-        key=lambda row: (
+    def filing_rank(row):
+        return (
             row["period_end"],
             1 if str(row.get("consolidated") or "").lower() == "consolidated" else 0,
             row["available_at"],
-        ),
+        )
+
+    def period_days(row):
+        if not row.get("period_start") or not row.get("period_end"):
+            return None
+        return (date.fromisoformat(row["period_end"]) - date.fromisoformat(row["period_start"])).days + 1
+
+    latest_financial = max(available_financials, key=filing_rank, default=None)
+    quarterly = max(
+        (row for row in available_financials if period_days(row) is not None and period_days(row) <= 120),
+        key=filing_rank,
+        default=None,
+    )
+    annual = max(
+        (row for row in available_financials if row.get("annual_revenue") is not None),
+        key=filing_rank,
         default=None,
     )
     shares = max(
@@ -1943,15 +2019,26 @@ def point_in_time_fundamentals(symbol, trade_date):
         default=None,
     )
     result = dict(empty)
-    if financial:
+    if latest_financial:
         result.update({
-            "fundamental_period_end": financial["period_end"],
-            "fundamental_available_at": financial["available_at"],
-            "revenue_growth_yoy": financial["revenue_growth_yoy"],
-            "pat_growth_yoy": financial["pat_growth_yoy"],
-            "debt_to_equity": financial["debt_to_equity"],
-            "roce": financial["roce"],
-            "fundamental_equity": financial["equity"],
+            "fundamental_period_end": latest_financial["period_end"],
+            "fundamental_available_at": latest_financial["available_at"],
+            "debt_to_equity": latest_financial["debt_to_equity"],
+            "fundamental_equity": latest_financial["equity"],
+        })
+    if quarterly:
+        result.update({
+            "revenue_growth_yoy": quarterly["revenue_growth_yoy"],
+            "pat_growth_yoy": quarterly["pat_growth_yoy"],
+            "roce": quarterly["roce"],
+        })
+    if annual:
+        result.update({
+            "annual_period_end": annual["period_end"],
+            "annual_available_at": annual["available_at"],
+            "annual_revenue_growth_yoy": annual["annual_revenue_growth_yoy"],
+            "annual_pat_growth_yoy": annual["annual_pat_growth_yoy"],
+            "annual_roce": annual["annual_roce"],
         })
     if shares:
         result["outstanding_shares"] = shares["outstanding_shares"]
@@ -1963,7 +2050,9 @@ def enrich_fundamental_context(ctx, symbol):
     values = point_in_time_fundamentals(symbol, ctx["date"]) if symbol else {
         "fundamental_period_end": None, "fundamental_available_at": None,
         "revenue_growth_yoy": None, "pat_growth_yoy": None, "debt_to_equity": None,
-        "roce": None, "fundamental_equity": None, "outstanding_shares": None,
+        "roce": None, "annual_period_end": None, "annual_available_at": None,
+        "annual_revenue_growth_yoy": None, "annual_pat_growth_yoy": None,
+        "annual_roce": None, "fundamental_equity": None, "outstanding_shares": None,
         "market_cap_shares_as_of": None,
     }
     ctx.update(values)
@@ -2651,13 +2740,22 @@ def ensure_strategy_schema(conn):
 
 def ensure_fundamental_system_rules(conn):
     for rule in FUNDAMENTAL_SYSTEM_RULES:
+        version = int(rule.get("version", 1))
         conn.execute(
             """
-            INSERT OR IGNORE INTO strategy_rules (
+            INSERT INTO strategy_rules (
               rule_id, name, description, kind, status, version, filters_json, created_at, updated_at
-            ) VALUES (?, ?, ?, 'system', 'active', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, 'system', 'active', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(rule_id) DO UPDATE SET
+              name = excluded.name,
+              description = excluded.description,
+              status = 'active',
+              version = excluded.version,
+              filters_json = excluded.filters_json,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE strategy_rules.kind = 'system' AND strategy_rules.version < excluded.version
             """,
-            (rule["id"], rule["name"], rule["description"], json.dumps(rule["filters"])),
+            (rule["id"], rule["name"], rule["description"], version, json.dumps(rule["filters"])),
         )
     conn.commit()
 

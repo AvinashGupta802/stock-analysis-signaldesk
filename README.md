@@ -144,6 +144,8 @@ Price range is a universe-level filter. It can be applied to a run independently
 
 The filter library also includes volume SMA10 versus SMA20, distance from the 52-week high, close versus SMA50, SMA50 versus SMA200, and three-month excess return versus the official Nifty 500 close series. Long-lookback filters reject stocks without enough history instead of calculating shortened substitutes.
 
+Fundamental growth is split into explicit period definitions: `Quarterly Revenue Growth YoY`, `Quarterly PAT Growth YoY`, and `Quarterly Estimated ROCE` use the latest three-month filing period; `Annual Revenue Growth YoY`, `Annual PAT Growth YoY`, and `Annual ROCE` use full financial-year facts embedded in annual XBRL filings. The Early Growth & Relative Strength system rule uses the annual filters.
+
 Two system rules reproduce the referenced scans:
 
 - `Early Volume Signs`: market cap Rs. 2,000-50,000 crore, volume SMA10 at least 1.3x SMA20, and one-week return at least 2%.

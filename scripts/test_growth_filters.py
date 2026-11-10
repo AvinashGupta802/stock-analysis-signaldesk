@@ -23,6 +23,9 @@ class GrowthFilterTests(unittest.TestCase):
             "revenue_growth_yoy": 20.0,
             "pat_growth_yoy": 25.0,
             "roce": 18.0,
+            "annual_revenue_growth_yoy": 22.0,
+            "annual_pat_growth_yoy": 30.0,
+            "annual_roce": 21.0,
             "debt_to_equity": 0.5,
             "fundamental_equity": 1000.0,
         }
@@ -50,6 +53,9 @@ class GrowthFilterTests(unittest.TestCase):
                 "revenue_growth_yoy",
                 "pat_growth_yoy",
                 "roce_range",
+                "annual_revenue_growth_yoy",
+                "annual_pat_growth_yoy",
+                "annual_roce_range",
                 "debt_to_equity_range",
             }.issubset(filter_ids)
         )
@@ -64,6 +70,9 @@ class GrowthFilterTests(unittest.TestCase):
             {"id": "revenue_growth_yoy", "values": {"minRevenueGrowthYoY": 15}},
             {"id": "pat_growth_yoy", "values": {"minPatGrowthYoY": 20}},
             {"id": "roce_range", "values": {"minRoce": 15}},
+            {"id": "annual_revenue_growth_yoy", "values": {"minAnnualRevenueGrowthYoY": 15}},
+            {"id": "annual_pat_growth_yoy", "values": {"minAnnualPatGrowthYoY": 20}},
+            {"id": "annual_roce_range", "values": {"minAnnualRoce": 15}},
             {"id": "debt_to_equity_range", "values": {"maxDebtToEquity": 1.2}},
         ]
         self.assertTrue(all(evaluate_filter(self.context, selected)[0] for selected in selections))
@@ -73,6 +82,35 @@ class GrowthFilterTests(unittest.TestCase):
         passed, reason = evaluate_filter(context, {"id": "revenue_growth_yoy", "values": {}})
         self.assertFalse(passed)
         self.assertIn("unavailable", reason)
+
+    def test_annual_and_quarterly_filters_use_separate_values(self):
+        context = dict(
+            self.context,
+            revenue_growth_yoy=-5,
+            annual_revenue_growth_yoy=20,
+        )
+        quarterly, _ = evaluate_filter(
+            context, {"id": "revenue_growth_yoy", "values": {"minRevenueGrowthYoY": 15}}
+        )
+        annual, reason = evaluate_filter(
+            context,
+            {"id": "annual_revenue_growth_yoy", "values": {"minAnnualRevenueGrowthYoY": 15}},
+        )
+        self.assertFalse(quarterly)
+        self.assertTrue(annual)
+        self.assertIn("Annual revenue", reason)
+
+    def test_growth_system_rule_uses_annual_filters(self):
+        rule = next(
+            item for item in FUNDAMENTAL_SYSTEM_RULES
+            if item["id"] == "rule_early_growth_relative_strength"
+        )
+        self.assertEqual(rule["version"], 3)
+        filter_ids = {item["id"] for item in rule["filters"]}
+        self.assertTrue(
+            {"annual_revenue_growth_yoy", "annual_pat_growth_yoy", "annual_roce_range"}.issubset(filter_ids)
+        )
+        self.assertFalse({"revenue_growth_yoy", "pat_growth_yoy", "roce_range"} & filter_ids)
 
     def test_volume_average_acceleration(self):
         passed, _ = evaluate_filter(
