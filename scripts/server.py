@@ -734,14 +734,22 @@ def get_rule_results(payload):
         if stored:
             return stored
     rows = []
+    unavailable = []
+    failed_count = 0
+    universe_count = 0
     with connect() as conn:
         stocks = load_group_stocks(conn, group)
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
+            universe_count += 1
             result = evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters)
             if result["passed"]:
                 rows.append(result)
+            elif result_has_unavailable_data(result):
+                unavailable.append(unavailable_result(result))
+            else:
+                failed_count += 1
     rows.sort(key=lambda row: (row["volume"], row["symbol"]), reverse=True)
     return {
         "rule": rule,
@@ -750,6 +758,8 @@ def get_rule_results(payload):
         "group": group,
         "total": len(rows),
         "results": rows[:limit],
+        "unavailable": unavailable[:limit],
+        "coverage": build_coverage(universe_count, len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
         "source": "live",
     }
@@ -772,14 +782,22 @@ def get_rule_group_results(payload):
         if stored:
             return stored
     rows = []
+    unavailable = []
+    failed_count = 0
+    universe_count = 0
     with connect() as conn:
         stocks = load_group_stocks(conn, group)
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
+            universe_count += 1
             result = evaluate_stock_group_on_date(conn, stock, trade_date, rules, scoring, universe_filters)
             if result["passed"]:
                 rows.append(result)
+            elif result_has_unavailable_data(result):
+                unavailable.append(unavailable_result(result))
+            else:
+                failed_count += 1
     rows.sort(key=lambda row: (row["weightedScore"], row["matchCount"], row["volume"], row["symbol"]), reverse=True)
     return {
         "rules": rules,
@@ -789,6 +807,8 @@ def get_rule_group_results(payload):
         **scoring,
         "total": len(rows),
         "results": rows[:limit],
+        "unavailable": unavailable[:limit],
+        "coverage": build_coverage(universe_count, len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
         "source": "live",
     }
@@ -802,11 +822,14 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
     if not group_symbols:
         return None
     rows = []
+    unavailable = []
+    failed_count = 0
+    universe_count = 0
     for row in conn.execute(
         """
         SELECT result_json
         FROM rule_daily_results
-        WHERE trade_date = ? AND rule_id = ? AND rule_version = ? AND exchange = 'NSE' AND passed = 1
+        WHERE trade_date = ? AND rule_id = ? AND rule_version = ? AND exchange = 'NSE'
         """,
         (trade_date, stored_rule["rule_id"], stored_rule["version"]),
     ):
@@ -815,9 +838,14 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
             continue
         if search and search not in result["symbol"].upper() and search not in (result.get("name") or "").upper():
             continue
-        if not apply_stored_universe_filters(result, universe_filters):
-            continue
-        rows.append(result)
+        universe_count += 1
+        universe_passed = apply_stored_universe_filters(result, universe_filters) if result.get("close") is not None else False
+        if result.get("passed") and universe_passed:
+            rows.append(result)
+        elif result_has_unavailable_data(result):
+            unavailable.append(unavailable_result(result))
+        else:
+            failed_count += 1
     if not rows and not has_stored_rule_date(conn, trade_date, stored_rule):
         return None
     rows.sort(key=lambda item: (item.get("volume") or 0, item["symbol"]), reverse=True)
@@ -828,6 +856,8 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
         "group": group,
         "total": len(rows),
         "results": rows[:limit],
+        "unavailable": unavailable[:limit],
+        "coverage": build_coverage(universe_count, len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
         "source": "stored_eod",
     }
@@ -851,7 +881,7 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
             """
             SELECT result_json
             FROM rule_daily_results
-            WHERE trade_date = ? AND rule_id = ? AND rule_version = ? AND exchange = 'NSE' AND passed = 1
+            WHERE trade_date = ? AND rule_id = ? AND rule_version = ? AND exchange = 'NSE'
             """,
             (trade_date, stored_rule["rule_id"], stored_rule["version"]),
         ):
@@ -861,9 +891,18 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
                 continue
             if search and search not in symbol.upper() and search not in (rule_result.get("name") or "").upper():
                 continue
-            if not apply_stored_universe_filters(rule_result, universe_filters):
+            item = by_symbol.setdefault(symbol, {**dict(rule_result), "matchedRules": [], "failedRuleResults": []})
+            if not rule_result.get("passed"):
+                item["failedRuleResults"].append(rule_result)
                 continue
-            item = by_symbol.setdefault(symbol, dict(rule_result))
+            matched_rules = item["matchedRules"]
+            failed_results = item["failedRuleResults"]
+            item.update(rule_result)
+            item["matchedRules"] = matched_rules
+            item["failedRuleResults"] = failed_results
+            if not apply_stored_universe_filters(rule_result, universe_filters):
+                item["universeFailed"] = True
+                continue
             item.setdefault("matchedRules", [])
             item["matchedRules"].append(
                 {
@@ -874,12 +913,23 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
                 }
             )
     rows = []
+    unavailable = []
+    failed_count = 0
     for item in by_symbol.values():
         match_count = len(item.get("matchedRules") or [])
         agreement = score_group_agreement(
             [rule["id"] for rule in item.get("matchedRules") or []], scoring
         )
-        if not agreement["passed"]:
+        if not agreement["passed"] or item.get("universeFailed"):
+            failed_results = item.get("failedRuleResults") or []
+            if any(result_has_unavailable_data(result) for result in failed_results):
+                merged = dict(item)
+                merged["reasons"] = [
+                    reason for result in failed_results for reason in result.get("reasons") or []
+                ]
+                unavailable.append(unavailable_result(merged))
+            else:
+                failed_count += 1
             continue
         item["passed"] = True
         item["matchCount"] = match_count
@@ -900,6 +950,8 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
         **scoring,
         "total": len(rows),
         "results": rows[:limit],
+        "unavailable": unavailable[:limit],
+        "coverage": build_coverage(len(by_symbol), len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
         "source": "stored_eod",
     }
@@ -1464,14 +1516,17 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters=None)
         (stock["id"], trade_date),
     ).fetchall()
     if len(rows) < 21:
-        return {"passed": False}
+        return unavailable_history_result(stock, trade_date)
     series = [dict(row) for row in reversed(rows)]
     if series[-1]["trade_date"] != trade_date:
-        return {"passed": False}
+        return unavailable_history_result(stock, trade_date)
     ctx = enrich_fundamental_context(build_context(series, len(series) - 1), stock["symbol"])
     universe_passed, universe_reasons = apply_universe_filters(ctx, universe_filters)
     if not universe_passed:
-        return {"passed": False}
+        return {
+            "passed": False, "symbol": stock["symbol"], "name": stock["name"],
+            "date": trade_date, "close": ctx["close"], "reasons": universe_reasons,
+        }
     passed, reasons = apply_rule(ctx, rule)
     reasons = universe_reasons + reasons
     next_row = conn.execute(
@@ -1534,6 +1589,8 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters=None)
         "nextClose": next_row["close"] if next_row else None,
         "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
         "reasons": reasons,
+        "fundamentalSource": ctx.get("fundamental_source_exchange"),
+        "marketCapSource": ctx.get("market_cap_source_exchange"),
     }
 
 
@@ -1554,14 +1611,17 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, scoring, univer
         (stock["id"], trade_date),
     ).fetchall()
     if len(rows) < 21:
-        return {"passed": False}
+        return unavailable_history_result(stock, trade_date)
     series = [dict(row) for row in reversed(rows)]
     if series[-1]["trade_date"] != trade_date:
-        return {"passed": False}
+        return unavailable_history_result(stock, trade_date)
     ctx = enrich_fundamental_context(build_context(series, len(series) - 1), stock["symbol"])
     universe_passed, universe_reasons = apply_universe_filters(ctx, universe_filters)
     if not universe_passed:
-        return {"passed": False}
+        return {
+            "passed": False, "symbol": stock["symbol"], "name": stock["name"],
+            "date": trade_date, "close": ctx["close"], "reasons": universe_reasons,
+        }
     matched_rules = []
     failed_rules = []
     for rule in rules:
@@ -1648,6 +1708,8 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, scoring, univer
         "minWeightedScore": scoring["minWeightedScore"],
         "matchedRules": matched_rules,
         "failedRules": failed_rules,
+        "fundamentalSource": ctx.get("fundamental_source_exchange"),
+        "marketCapSource": ctx.get("market_cap_source_exchange"),
     }
 
 
@@ -1659,6 +1721,7 @@ def apply_rule(ctx, rule):
         reasons.append({
             "filter": definition["name"] if definition else selected["id"],
             "passed": passed,
+            "availability": "unavailable" if unavailable_reason(reason) else "available",
             "reason": reason,
         })
         if not passed:
@@ -2426,6 +2489,75 @@ def build_scan_metrics(rows):
     }
 
 
+def unavailable_reason(reason):
+    text = str(reason or "").lower()
+    return "unavailable" in text or "not available" in text or "no usable price history" in text
+
+
+def result_has_unavailable_data(result):
+    if unavailable_reason(result.get("reason")):
+        return True
+    return any(
+        reason.get("availability") == "unavailable" or unavailable_reason(reason.get("reason"))
+        for reason in result.get("reasons") or []
+    )
+
+
+def unavailable_result(result):
+    reasons = []
+    for reason in result.get("reasons") or []:
+        if reason.get("availability") == "unavailable" or unavailable_reason(reason.get("reason")):
+            reasons.append({
+                "filter": reason.get("filter") or "Required data",
+                "reason": reason.get("reason") or "Required data is unavailable.",
+            })
+    if not reasons and unavailable_reason(result.get("reason")):
+        reasons.append({"filter": "Price history", "reason": result["reason"]})
+    unique = []
+    seen = set()
+    for reason in reasons:
+        key = (reason["filter"], reason["reason"])
+        if key not in seen:
+            unique.append(reason)
+            seen.add(key)
+    return {
+        "symbol": result.get("symbol"),
+        "name": result.get("name"),
+        "close": result.get("close"),
+        "missing": unique,
+        "fundamentalSource": result.get("fundamentalSource"),
+        "marketCapSource": result.get("marketCapSource"),
+    }
+
+
+def unavailable_history_result(stock, trade_date):
+    return {
+        "passed": False,
+        "symbol": stock["symbol"],
+        "name": stock["name"],
+        "date": trade_date,
+        "reason": "No usable price history for this date.",
+        "reasons": [{
+            "filter": "Price history",
+            "passed": False,
+            "availability": "unavailable",
+            "reason": "No usable price history for this date.",
+        }],
+    }
+
+
+def build_coverage(universe_count, passed_count, failed_count, unavailable_count):
+    evaluated = max(0, universe_count - unavailable_count)
+    return {
+        "universe": universe_count,
+        "evaluated": evaluated,
+        "passed": passed_count,
+        "failed": failed_count,
+        "unavailable": unavailable_count,
+        "coveragePct": (evaluated / universe_count) * 100 if universe_count else 0,
+    }
+
+
 def forward_returns(rows, index, horizons):
     returns = {}
     close = rows[index]["close"]
@@ -2561,6 +2693,7 @@ def apply_universe_filters(ctx, filters):
         reasons.append({
             "filter": definition["name"] if definition else selected["id"],
             "passed": passed,
+            "availability": "unavailable" if unavailable_reason(reason) else "available",
             "reason": reason,
         })
         if not passed:
@@ -3133,6 +3266,8 @@ def store_rule_daily_results(conn, trade_date, rules):
                 "nextClose": next_row["close"] if next_row else None,
                 "nextDayReturn": pct(next_row["close"], ctx["close"]) if next_row else None,
                 "reasons": reasons,
+                "fundamentalSource": ctx.get("fundamental_source_exchange"),
+                "marketCapSource": ctx.get("market_cap_source_exchange"),
             }
             conn.execute(
                 """

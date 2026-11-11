@@ -279,6 +279,119 @@ button:disabled {
   gap: 12px;
 }
 
+.coverage-strip {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.8fr) minmax(220px, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.coverage-copy strong,
+.coverage-copy span {
+  display: block;
+}
+
+.coverage-copy span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.coverage-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #e7ebe5;
+}
+
+.coverage-track span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+}
+
+.coverage-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+
+.passed-dot { background: var(--green); }
+.failed-dot { background: var(--red); }
+.unavailable-dot { background: var(--amber); }
+
+.segmented-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f4f6f2;
+}
+
+.segmented-control button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.segmented-control button.active {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(21, 35, 26, 0.12);
+}
+
+.unavailable-row {
+  cursor: default;
+  background: #fffdfa;
+}
+
+.missing-reason {
+  min-width: 520px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.data-status,
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f7f9f6;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.unavailable-status,
+.fallback-source {
+  border-color: #efd6a9;
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
 .metric {
   padding: 16px;
 }
@@ -454,6 +567,14 @@ tbody tr.active {
   .content-grid,
   .metrics-grid {
     grid-template-columns: 1fr;
+  }
+
+  .coverage-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .coverage-breakdown {
+    justify-content: flex-start;
   }
 }
 

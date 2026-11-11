@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SignalDesk Rule Builder</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=builder-40" />
   </head>
   <body>
     <main class="app-shell">
@@ -189,11 +189,19 @@
 
         <section class="metrics-grid" id="metricsGrid"></section>
 
+        <section class="coverage-strip" id="coveragePanel" aria-live="polite"></section>
+
         <section class="content-grid" id="analysisWorkspace">
           <div class="recommendations">
             <div class="section-title">
-              <h2>Stocks Passing Selection</h2>
-              <span id="resultMeta"></span>
+              <div>
+                <h2 id="resultsTitle">Stocks Passing Selection</h2>
+                <span id="resultMeta"></span>
+              </div>
+              <div class="segmented-control" id="resultViewToggle" aria-label="Result view">
+                <button type="button" data-result-view="passed" class="active">Passed</button>
+                <button type="button" data-result-view="unavailable">Data unavailable</button>
+              </div>
             </div>
             <div id="backtestSummary" class="backtest-summary"></div>
             <div class="table-wrap">
@@ -284,6 +292,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-39"></script>
+    <script src="./app.js?v=builder-40"></script>
   </body>
 </html>

@@ -114,6 +114,9 @@ const state = {
   date: null,
   search: "",
   results: [],
+  unavailable: [],
+  coverage: {},
+  resultView: "passed",
   resultSource: "",
   metrics: {},
   prices: [],
@@ -188,6 +191,9 @@ const el = {
   statusText: document.querySelector("#statusText"),
   pageTitle: document.querySelector("#pageTitle"),
   metricsGrid: document.querySelector("#metricsGrid"),
+  coveragePanel: document.querySelector("#coveragePanel"),
+  resultsTitle: document.querySelector("#resultsTitle"),
+  resultViewToggle: document.querySelector("#resultViewToggle"),
   resultMeta: document.querySelector("#resultMeta"),
   backtestSummary: document.querySelector("#backtestSummary"),
   resultsBody: document.querySelector("#resultsBody"),
@@ -218,6 +224,14 @@ async function init() {
 }
 
 function bindShell() {
+  el.resultViewToggle.querySelectorAll("button[data-result-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.resultView = button.dataset.resultView;
+      renderCoverage();
+      renderTable();
+      renderDetails();
+    });
+  });
   el.viewButtons.forEach((button) => {
     button.addEventListener("click", () => {
       state.view = button.dataset.viewButton;
@@ -373,6 +387,7 @@ function renderAll() {
   renderBacktestControls();
   renderStockLabControls();
   renderMetrics();
+  renderCoverage();
   renderTable();
   renderDetails();
   renderBacktest();
@@ -388,6 +403,7 @@ function renderView() {
   });
   const showingStockLab = state.view === "stocklab";
   el.metricsGrid.hidden = showingStockLab;
+  el.coveragePanel.hidden = showingStockLab;
   el.analysisWorkspace.hidden = showingStockLab;
   el.stockLabWorkspace.hidden = !showingStockLab;
 }
@@ -616,13 +632,40 @@ function renderStockLabControls() {
 }
 
 function renderMetrics() {
+  const coverage = state.coverage || {};
   const rows = [
-    ["Passed stocks", state.metrics.passedStocks ?? 0],
-    ["Avg next-day", formatPct(state.metrics.avgNextDayMove ?? 0)],
-    ["Next-day positive", formatPct(state.metrics.nextDayPositiveRate ?? 0)],
-    ["Pending", state.metrics.pendingOutcomes ?? 0],
+    ["Stock universe", coverage.universe ?? 0],
+    ["Fully evaluated", coverage.evaluated ?? 0],
+    ["Passed selection", coverage.passed ?? state.metrics.passedStocks ?? 0],
+    ["Data unavailable", coverage.unavailable ?? 0],
   ];
   el.metricsGrid.innerHTML = rows.map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
+}
+
+function renderCoverage() {
+  const coverage = state.coverage || {};
+  const universe = Number(coverage.universe || 0);
+  const evaluated = Number(coverage.evaluated || 0);
+  const pctValue = universe ? (evaluated / universe) * 100 : 0;
+  el.coveragePanel.innerHTML = `
+    <div class="coverage-copy">
+      <strong>${formatPlainPct(pctValue)} data coverage</strong>
+      <span>${formatNumber(evaluated)} of ${formatNumber(universe)} stocks had the inputs required by this selection.</span>
+    </div>
+    <div class="coverage-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pctValue.toFixed(1)}">
+      <span style="width: ${Math.max(0, Math.min(100, pctValue))}%"></span>
+    </div>
+    <div class="coverage-breakdown">
+      <span><i class="status-dot passed-dot"></i>${formatNumber(coverage.passed || 0)} passed</span>
+      <span><i class="status-dot failed-dot"></i>${formatNumber(coverage.failed || 0)} failed conditions</span>
+      <span><i class="status-dot unavailable-dot"></i>${formatNumber(coverage.unavailable || 0)} unavailable</span>
+    </div>
+  `;
+  el.resultViewToggle.querySelectorAll("button[data-result-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.resultView === state.resultView);
+    if (button.dataset.resultView === "passed") button.textContent = `Passed (${formatNumber(coverage.passed || 0)})`;
+    if (button.dataset.resultView === "unavailable") button.textContent = `Data unavailable (${formatNumber(coverage.unavailable || 0)})`;
+  });
 }
 
 function renderStockLab() {
@@ -730,7 +773,26 @@ function bindStockLabDraftActions() {
 
 function renderTable() {
   const sourceLabel = state.resultSource === "stored_eod" ? "Stored EOD" : state.resultSource === "live" ? "Live calculation" : "";
-  el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(state.results.length)} shown${sourceLabel ? ` - ${sourceLabel}` : ""}`;
+  const showingUnavailable = state.resultView === "unavailable";
+  const visibleRows = showingUnavailable ? state.unavailable : state.results;
+  el.resultsTitle.textContent = showingUnavailable ? "Stocks Missing Required Data" : "Stocks Passing Selection";
+  el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(visibleRows.length)} shown${sourceLabel ? ` - ${sourceLabel}` : ""}`;
+  if (showingUnavailable) {
+    if (!state.unavailable.length) {
+      el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Every stock in this selection had the required data.</td></tr>`;
+      return;
+    }
+    el.resultsBody.innerHTML = state.unavailable.map((item) => `
+      <tr class="unavailable-row">
+        <td class="stock-name"><strong>${escapeHtml(item.symbol || "-")}</strong><span>${escapeHtml(item.name || "")}</span></td>
+        <td><span class="data-status unavailable-status">Unavailable</span></td>
+        <td>${item.close == null ? "N/A" : `Rs. ${formatMoney(item.close)}`}</td>
+        <td colspan="16" class="missing-reason">${(item.missing || []).map((reason) => `<strong>${escapeHtml(reason.filter)}:</strong> ${escapeHtml(reason.reason)}`).join(" ") || "Required history is unavailable."}</td>
+        <td>${sourceBadges(item)}</td>
+      </tr>
+    `).join("");
+    return;
+  }
   if (!state.results.length) {
     el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
     return;
@@ -765,6 +827,12 @@ function renderTable() {
 }
 
 function renderDetails() {
+  if (state.resultView === "unavailable") {
+    el.selectedTitle.textContent = "Data availability";
+    el.chart.innerHTML = "";
+    el.details.innerHTML = `<div class="empty-state">Unavailable stocks are excluded because one or more required inputs could not be calculated. They have not failed the filter condition.</div>`;
+    return;
+  }
   const item = state.results.find((row) => row.symbol === state.selectedSymbol);
   if (!item) {
     el.selectedTitle.textContent = "Stock detail";
@@ -802,10 +870,21 @@ function renderDetails() {
       <p>RSI 14 is ${Number(item.rsi14 || 0).toFixed(2)}, previous RSI was ${Number(item.previousRsi14 || 0).toFixed(2)}, MFI 14 is ${Number(item.mfi14 || 0).toFixed(2)}, and CCI 14 is ${formatSignedNumber(item.cci14 || 0)}.</p>
     </div>
     <div class="detail-block">
+      <h3>Data Sources</h3>
+      <p>${sourceBadges(item) || "Price and delivery data: NSE"}</p>
+    </div>
+    <div class="detail-block">
       <h3>Filter Results</h3>
-      <ul>${item.reasons.map((reason) => `<li>${escapeHtml(reason.filter)}: ${reason.passed ? "Pass" : "Fail"} - ${escapeHtml(reason.reason)}</li>`).join("")}</ul>
+      <ul>${item.reasons.map((reason) => `<li>${escapeHtml(reason.filter)}: ${reason.availability === "unavailable" ? "Unavailable" : reason.passed ? "Pass" : "Fail"} - ${escapeHtml(reason.reason)}</li>`).join("")}</ul>
     </div>
   `;
+}
+
+function sourceBadges(item) {
+  const sources = [];
+  if (item.marketCapSource) sources.push(`<span class="source-badge ${item.marketCapSource === "BSE" ? "fallback-source" : ""}">Market cap: ${escapeHtml(item.marketCapSource)}</span>`);
+  if (item.fundamentalSource) sources.push(`<span class="source-badge ${item.fundamentalSource === "BSE" ? "fallback-source" : ""}">Fundamentals: ${escapeHtml(item.fundamentalSource)}</span>`);
+  return sources.join(" ");
 }
 
 function renderBacktest() {
@@ -859,6 +938,8 @@ async function runRuleScan(seq) {
   const result = await postJson("/api/rule/results", payload);
   if (seq !== state.scanSeq) return;
   state.results = result.results || [];
+  state.unavailable = result.unavailable || [];
+  state.coverage = result.coverage || {};
   state.resultSource = result.source || "";
   state.metrics = result.metrics || {};
   state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
@@ -1128,6 +1209,8 @@ async function runRuleGroupScan(seq) {
   const selectedRules = rulesForCurrentGroup();
   if (!selectedRules.length) {
     state.results = [];
+    state.unavailable = [];
+    state.coverage = {};
     state.metrics = {};
     state.selectedSymbol = null;
     state.prices = [];
@@ -1149,6 +1232,8 @@ async function runRuleGroupScan(seq) {
   const result = await postJson("/api/rule-group/results", payload);
   if (seq !== state.scanSeq) return;
   state.results = result.results || [];
+  state.unavailable = result.unavailable || [];
+  state.coverage = result.coverage || {};
   state.resultSource = result.source || "";
   state.metrics = result.metrics || {};
   state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
