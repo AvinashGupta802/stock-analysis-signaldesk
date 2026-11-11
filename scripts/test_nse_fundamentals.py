@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import import_nse_fundamentals as fundamentals
-from run_daily_pipeline import analysis_is_complete, fundamental_poll_start
+from run_daily_pipeline import analysis_is_complete, fundamental_poll_start, fundamental_signature
 
 
 FINANCIAL_XML = b"""<?xml version="1.0"?>
@@ -142,9 +142,28 @@ class FundamentalsImporterTests(unittest.TestCase):
                 conn.close()
             self.assertTrue(analysis_is_complete(path, "2026-11-06"))
 
+    def test_fundamental_signature_changes_when_fallback_adds_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.sqlite3"
+            conn = sqlite3.connect(path)
+            try:
+                conn.executescript(fundamentals.SCHEMA)
+                before = fundamental_signature(path)
+                conn.execute(
+                    """INSERT INTO share_capital_filings
+                       (filing_id, symbol, as_of_date, available_at, outstanding_shares)
+                       VALUES ('BSE-1', 'TEST', '2026-09-30', '2026-10-20 10:00:00', 100)"""
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            self.assertNotEqual(before, fundamental_signature(path))
+
     def test_missing_shareholding_selects_latest_uncovered_symbol(self):
         self.conn.execute(
-            "INSERT INTO share_capital_filings VALUES ('SHP-1', 'COVERED', '2026-09-30', '2026-10-10 10:00:00', 100, NULL, NULL)"
+            """INSERT INTO share_capital_filings
+               (filing_id, symbol, as_of_date, available_at, outstanding_shares, promoter_pct, public_pct)
+               VALUES ('SHP-1', 'COVERED', '2026-09-30', '2026-10-10 10:00:00', 100, NULL, NULL)"""
         )
         records = [
             {"symbol": "COVERED", "broadcastDate": "11-OCT-2026 10:00:00"},

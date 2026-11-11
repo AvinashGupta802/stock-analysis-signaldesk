@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS fundamental_filings (
   parse_status TEXT NOT NULL,
   parse_message TEXT,
   source_json TEXT NOT NULL,
-  imported_at TEXT DEFAULT CURRENT_TIMESTAMP
+  imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  source_exchange TEXT NOT NULL DEFAULT 'NSE',
+  source_reference TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_fundamental_filings_symbol_period
@@ -75,6 +77,8 @@ CREATE TABLE IF NOT EXISTS company_fundamentals (
   debt_to_equity REAL,
   roce REAL,
   roce_method TEXT,
+  source_exchange TEXT NOT NULL DEFAULT 'NSE',
+  source_reference TEXT,
   FOREIGN KEY (filing_id) REFERENCES fundamental_filings(filing_id)
 );
 
@@ -89,6 +93,8 @@ CREATE TABLE IF NOT EXISTS share_capital_filings (
   outstanding_shares REAL,
   promoter_pct REAL,
   public_pct REAL,
+  source_exchange TEXT NOT NULL DEFAULT 'NSE',
+  source_reference TEXT,
   FOREIGN KEY (filing_id) REFERENCES fundamental_filings(filing_id)
 );
 
@@ -112,7 +118,8 @@ JOIN share_capital_filings AS shares ON shares.filing_id = (
   WHERE candidate.symbol = instruments.symbol
     AND candidate.outstanding_shares IS NOT NULL
     AND candidate.available_at <= prices.trade_date || ' 23:59:59'
-  ORDER BY candidate.available_at DESC
+  ORDER BY CASE WHEN COALESCE(candidate.source_exchange, 'NSE') = 'NSE' THEN 1 ELSE 0 END DESC,
+           candidate.available_at DESC
   LIMIT 1
 )
 WHERE instruments.exchange = 'NSE';
@@ -211,6 +218,33 @@ def ensure_fundamental_columns(conn):
     ):
         if name not in columns:
             conn.execute(f"ALTER TABLE company_fundamentals ADD COLUMN {name} REAL")
+    for table in ("fundamental_filings", "company_fundamentals", "share_capital_filings"):
+        table_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "source_exchange" not in table_columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN source_exchange TEXT NOT NULL DEFAULT 'NSE'")
+        if "source_reference" not in table_columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN source_reference TEXT")
+    conn.execute("DROP VIEW IF EXISTS daily_market_cap")
+    conn.execute(
+        """CREATE VIEW daily_market_cap AS
+           SELECT instruments.symbol, prices.trade_date, prices.close,
+                  shares.outstanding_shares, shares.as_of_date AS shares_as_of_date,
+                  shares.available_at AS shares_available_at,
+                  (prices.close * shares.outstanding_shares) / 10000000.0 AS market_cap_cr
+           FROM daily_prices AS prices
+           JOIN instruments AS instruments ON instruments.id = prices.instrument_id
+           JOIN share_capital_filings AS shares ON shares.filing_id = (
+             SELECT candidate.filing_id
+             FROM share_capital_filings AS candidate
+             WHERE candidate.symbol = instruments.symbol
+               AND candidate.outstanding_shares IS NOT NULL
+               AND candidate.available_at <= prices.trade_date || ' 23:59:59'
+             ORDER BY CASE WHEN COALESCE(candidate.source_exchange, 'NSE') = 'NSE' THEN 1 ELSE 0 END DESC,
+                      candidate.available_at DESC
+             LIMIT 1
+           )
+           WHERE instruments.exchange = 'NSE'"""
+    )
 
 
 def fetch_json(opener, url):

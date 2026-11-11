@@ -16,7 +16,11 @@ This is a research tool, not financial advice. Backtest results do not include e
 
 ## Run Locally
 
-Requirements: Python 3.10 or newer and a modern browser. The application currently uses only Python standard-library modules at runtime.
+Requirements: Python 3.10 or newer, a modern browser, and the dependencies in `requirements.txt`.
+
+```powershell
+python -m pip install -r requirements.txt
+```
 
 ```powershell
 python scripts\server.py
@@ -81,11 +85,19 @@ The importer stores raw XBRL under `data/raw/nse_fundamentals` and normalizes:
 
 Every record retains the NSE broadcast timestamp. Backtests must select only filings whose `available_at` is on or before the signal time. ROCE currently annualizes the filing-period EBIT against current capital employed; it is an analytical estimate, not a company-reported ratio. Financial-sector companies can require sector-specific treatment.
 
+For NSE-listed companies whose NSE filing is missing or cannot be parsed, the BSE fallback matches the same company by ISIN and imports official BSE shareholding and structured-result data:
+
+```powershell
+python scripts\import_bse_fallback.py --to-date 2026-11-09
+```
+
+NSE remains the preferred source. BSE shareholding can fill outstanding shares and market capitalization; BSE structured results can fill quarterly revenue and PAT growth. Debt-to-equity, ROCE, annual growth, and promoter/public percentages are not inferred when the BSE endpoint does not provide the required inputs. Source exchange, source URL, and publication timestamp are retained for point-in-time auditing.
+
 The importer skips weekends and unavailable exchange files. Use `--no-download` to reprocess files already present under `data/raw`. Exchange formats and URLs can change, so verify row counts and the latest date after an import.
 
 ## EOD Workflow
 
-Run the complete daily pipeline. With no date, it imports the previous weekday, verifies price, delivery, and Nifty 500 data, and then runs EOD analysis:
+Run the complete daily pipeline. With no date, it imports NSE fundamentals, applies the BSE fallback where needed, imports the previous weekday, verifies price, delivery, and Nifty 500 data, and then runs EOD analysis:
 
 ```powershell
 python scripts\run_daily_pipeline.py
@@ -189,6 +201,7 @@ Run the focused automated checks:
 python -m unittest scripts/test_weighted_groups.py
 python -m unittest scripts/test_growth_filters.py
 python -m unittest scripts/test_nse_fundamentals.py
+python -m unittest scripts/test_bse_fallback.py
 python -m py_compile scripts/server.py scripts/strategy_scoring.py scripts/deep_audit_saved_strategy.py
 node --check app.js
 ```
@@ -206,6 +219,7 @@ The local server blocks direct access to database, source, and output files. How
 - `scripts/strategy_scoring.py` - pure weighted rule-group scoring
 - `scripts/import_exchange_bhavcopy.py` - NSE/BSE report download and import
 - `scripts/import_nse_fundamentals.py` - NSE financial and shareholding XBRL import
+- `scripts/import_bse_fallback.py` - ISIN-matched BSE fallback for missing NSE company data
 - `scripts/run_eod_analysis.py` - saved-strategy EOD runner
 - `scripts/deep_audit_saved_strategy.py` - long-running saved-strategy audit
 - `data/` - SQLite database and raw exchange files

@@ -24,10 +24,11 @@ strategy_scoring.py        SQLite database
 
 1. `import_exchange_bhavcopy.py` downloads or reads exchange reports and upserts instruments, daily prices, delivery data, and benchmark-index closes.
 2. `import_nse_fundamentals.py` stores raw XBRL and normalizes point-in-time financial and share-capital records.
-3. Rules and rule groups are edited in the UI and stored in SQLite.
-4. `run_eod_analysis.py` evaluates the active strategy for a date and stores rule and group results.
-5. The UI requests results for a signal date and stock group. Compatible stored results are returned immediately; changed definitions are evaluated on demand.
-6. Backtest and Stock Lab paths reuse the same rule evaluation and weighted-group scoring semantics.
+3. `import_bse_fallback.py` matches NSE and BSE instruments by ISIN and fills only missing share counts and quarterly growth inputs from official BSE filings. NSE remains the preferred source.
+4. Rules and rule groups are edited in the UI and stored in SQLite.
+5. `run_eod_analysis.py` evaluates the active strategy for a date and stores rule and group results.
+6. The UI requests results for a signal date and stock group. Compatible stored results are returned immediately; changed definitions are evaluated on demand.
+7. Backtest and Stock Lab paths reuse the same rule evaluation and weighted-group scoring semantics.
 
 ## Strategy Boundaries
 

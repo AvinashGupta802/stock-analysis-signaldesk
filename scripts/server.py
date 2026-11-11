@@ -1947,14 +1947,16 @@ def fundamental_history(symbol):
             """
             SELECT period_start, period_end, available_at, consolidated, revenue_growth_yoy, pat_growth_yoy,
                    debt_to_equity, roce, equity, annual_revenue, annual_pat,
-                   annual_revenue_growth_yoy, annual_pat_growth_yoy, annual_roce
+                   annual_revenue_growth_yoy, annual_pat_growth_yoy, annual_roce,
+                   COALESCE(source_exchange, 'NSE') AS source_exchange
             FROM company_fundamentals WHERE symbol = ? ORDER BY available_at
             """,
             (symbol,),
         ))
         shares = tuple(dict(row) for row in conn.execute(
             """
-            SELECT outstanding_shares, as_of_date, available_at
+            SELECT outstanding_shares, as_of_date, available_at,
+                   COALESCE(source_exchange, 'NSE') AS source_exchange
             FROM share_capital_filings
             WHERE symbol = ? AND outstanding_shares IS NOT NULL
             ORDER BY available_at
@@ -1986,6 +1988,8 @@ def point_in_time_fundamentals(symbol, trade_date):
         "fundamental_equity": None,
         "outstanding_shares": None,
         "market_cap_shares_as_of": None,
+        "fundamental_source_exchange": None,
+        "market_cap_source_exchange": None,
     }
     financial_history, share_history = fundamental_history(symbol)
     cutoff = trade_date + " 23:59:59"
@@ -1993,6 +1997,7 @@ def point_in_time_fundamentals(symbol, trade_date):
     def filing_rank(row):
         return (
             row["period_end"],
+            1 if row.get("source_exchange") == "NSE" else 0,
             1 if str(row.get("consolidated") or "").lower() == "consolidated" else 0,
             row["available_at"],
         )
@@ -2002,20 +2007,23 @@ def point_in_time_fundamentals(symbol, trade_date):
             return None
         return (date.fromisoformat(row["period_end"]) - date.fromisoformat(row["period_start"])).days + 1
 
-    latest_financial = max(available_financials, key=filing_rank, default=None)
+    nse_financials = [row for row in available_financials if row.get("source_exchange") == "NSE"]
+    latest_financial = max(nse_financials, key=filing_rank, default=None)
     quarterly = max(
-        (row for row in available_financials if period_days(row) is not None and period_days(row) <= 120),
+        (row for row in available_financials
+         if period_days(row) is not None and period_days(row) <= 120
+         and (row.get("revenue_growth_yoy") is not None or row.get("pat_growth_yoy") is not None)),
         key=filing_rank,
         default=None,
     )
     annual = max(
-        (row for row in available_financials if row.get("annual_revenue") is not None),
+        (row for row in nse_financials if row.get("annual_revenue") is not None),
         key=filing_rank,
         default=None,
     )
     shares = max(
         (row for row in share_history if row["available_at"] <= cutoff),
-        key=lambda row: row["available_at"],
+        key=lambda row: (1 if row.get("source_exchange") == "NSE" else 0, row["available_at"]),
         default=None,
     )
     result = dict(empty)
@@ -2025,12 +2033,14 @@ def point_in_time_fundamentals(symbol, trade_date):
             "fundamental_available_at": latest_financial["available_at"],
             "debt_to_equity": latest_financial["debt_to_equity"],
             "fundamental_equity": latest_financial["equity"],
+            "fundamental_source_exchange": latest_financial["source_exchange"],
         })
     if quarterly:
         result.update({
             "revenue_growth_yoy": quarterly["revenue_growth_yoy"],
             "pat_growth_yoy": quarterly["pat_growth_yoy"],
             "roce": quarterly["roce"],
+            "fundamental_source_exchange": quarterly["source_exchange"],
         })
     if annual:
         result.update({
@@ -2043,6 +2053,7 @@ def point_in_time_fundamentals(symbol, trade_date):
     if shares:
         result["outstanding_shares"] = shares["outstanding_shares"]
         result["market_cap_shares_as_of"] = shares["as_of_date"]
+        result["market_cap_source_exchange"] = shares["source_exchange"]
     return result
 
 
@@ -2054,6 +2065,7 @@ def enrich_fundamental_context(ctx, symbol):
         "annual_revenue_growth_yoy": None, "annual_pat_growth_yoy": None,
         "annual_roce": None, "fundamental_equity": None, "outstanding_shares": None,
         "market_cap_shares_as_of": None,
+        "fundamental_source_exchange": None, "market_cap_source_exchange": None,
     }
     ctx.update(values)
     shares = values.get("outstanding_shares")

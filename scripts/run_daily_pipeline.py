@@ -121,6 +121,25 @@ def fundamental_poll_start(db_path, fallback_date):
     return max(fallback_date, date.today() - timedelta(days=7))
 
 
+def fundamental_signature(db_path):
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        return conn.execute(
+            """SELECT
+                 (SELECT COUNT(*) FROM company_fundamentals),
+                 (SELECT COALESCE(MAX(available_at), '') FROM company_fundamentals),
+                 (SELECT COUNT(*) FROM share_capital_filings),
+                 (SELECT COALESCE(MAX(available_at), '') FROM share_capital_filings)
+               """
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return (0, "", 0, "")
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def run(command):
     print(f"\n> {' '.join(str(part) for part in command)}", flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
@@ -181,6 +200,7 @@ def main():
     imported_dates = []
     analyzed_dates = []
     unavailable_dates = []
+    fundamentals_before = fundamental_signature(db_path)
     fundamentals_from = fundamental_poll_start(db_path, targets[0])
     run(
         [
@@ -194,6 +214,17 @@ def main():
             str(db_path),
         ]
     )
+    run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "import_bse_fallback.py"),
+            "--to-date",
+            end_date.isoformat(),
+            "--db",
+            str(db_path),
+        ]
+    )
+    fundamentals_changed = fundamental_signature(db_path) != fundamentals_before
     for target in targets:
         trade_date = target.isoformat()
         price_count, delivery_count, benchmark_count = dataset_counts(db_path, trade_date)
@@ -227,7 +258,7 @@ def main():
 
         if not was_complete:
             imported_dates.append(trade_date)
-        if not was_complete or not analysis_is_complete(db_path, trade_date):
+        if fundamentals_changed or not was_complete or not analysis_is_complete(db_path, trade_date):
             run(
                 [
                     sys.executable,
