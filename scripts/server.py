@@ -738,7 +738,7 @@ def get_rule_results(payload):
     failed_count = 0
     universe_count = 0
     with connect() as conn:
-        stocks = load_group_stocks(conn, group)
+        stocks = load_group_stocks(conn, group, trade_date)
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
@@ -786,7 +786,7 @@ def get_rule_group_results(payload):
     failed_count = 0
     universe_count = 0
     with connect() as conn:
-        stocks = load_group_stocks(conn, group)
+        stocks = load_group_stocks(conn, group, trade_date)
         for stock in stocks:
             if search and search not in stock["symbol"].upper() and search not in (stock["name"] or "").upper():
                 continue
@@ -818,7 +818,7 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
     stored_rule = match_stored_rule(conn, raw_rule, rule)
     if not stored_rule or not trade_date:
         return None
-    group_symbols = {stock["symbol"] for stock in load_group_stocks(conn, group)}
+    group_symbols = {stock["symbol"] for stock in load_group_stocks(conn, group, trade_date)}
     if not group_symbols:
         return None
     rows = []
@@ -872,7 +872,7 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
         if not stored_rule or not has_stored_rule_date(conn, trade_date, stored_rule):
             return None
         stored_rules.append(stored_rule)
-    group_symbols = {stock["symbol"] for stock in load_group_stocks(conn, group)}
+    group_symbols = {stock["symbol"] for stock in load_group_stocks(conn, group, trade_date)}
     if not group_symbols:
         return None
     by_symbol = {}
@@ -1516,7 +1516,7 @@ def evaluate_stock_on_date(conn, stock, trade_date, rule, universe_filters=None)
         (stock["id"], trade_date),
     ).fetchall()
     if len(rows) < 21:
-        return unavailable_history_result(stock, trade_date)
+        return unavailable_history_result(stock, trade_date, len(rows))
     series = [dict(row) for row in reversed(rows)]
     if series[-1]["trade_date"] != trade_date:
         return unavailable_history_result(stock, trade_date)
@@ -1611,7 +1611,7 @@ def evaluate_stock_group_on_date(conn, stock, trade_date, rules, scoring, univer
         (stock["id"], trade_date),
     ).fetchall()
     if len(rows) < 21:
-        return unavailable_history_result(stock, trade_date)
+        return unavailable_history_result(stock, trade_date, len(rows))
     series = [dict(row) for row in reversed(rows)]
     if series[-1]["trade_date"] != trade_date:
         return unavailable_history_result(stock, trade_date)
@@ -2530,18 +2530,25 @@ def unavailable_result(result):
     }
 
 
-def unavailable_history_result(stock, trade_date):
+def unavailable_history_result(stock, trade_date, history_count=None):
+    if history_count is not None:
+        reason = (
+            f"Only {history_count} NSE trading sessions are available; "
+            "at least 21 are required. This is usually a recent listing."
+        )
+    else:
+        reason = "No NSE price was published for this stock on the selected trading date."
     return {
         "passed": False,
         "symbol": stock["symbol"],
         "name": stock["name"],
         "date": trade_date,
-        "reason": "No usable price history for this date.",
+        "reason": reason,
         "reasons": [{
             "filter": "Price history",
             "passed": False,
             "availability": "unavailable",
-            "reason": "No usable price history for this date.",
+            "reason": reason,
         }],
     }
 
@@ -2745,27 +2752,43 @@ def load_rows(conn, instrument_id):
     ]
 
 
-def load_group_stocks(conn, group):
+def load_group_stocks(conn, group, trade_date=None):
+    active_join = ""
+    active_params = ()
+    if trade_date:
+        active_join = "JOIN daily_prices active ON active.instrument_id = i.id AND active.trade_date = ?"
+        active_params = (trade_date,)
     if group in {"all", "liquid"}:
-        volume_clause = "AND latest.volume >= 100000" if group == "liquid" else ""
+        if trade_date:
+            volume_clause = "AND active.volume >= 100000" if group == "liquid" else ""
+        else:
+            active_join = "JOIN daily_prices active ON active.instrument_id = i.id AND active.trade_date = i.last_trade_date"
+            volume_clause = "AND active.volume >= 100000" if group == "liquid" else ""
         return conn.execute(
             f"""
             SELECT i.id, i.symbol, COALESCE(i.name, i.symbol) AS name
             FROM instruments i
-            JOIN daily_prices latest ON latest.instrument_id = i.id AND latest.trade_date = i.last_trade_date
+            {active_join}
             WHERE {NSE_COMPANY_STOCK_FILTER} {volume_clause}
             ORDER BY i.symbol
-            """
+            """,
+            active_params,
         ).fetchall()
+    active_exists = ""
+    params = [group]
+    if trade_date:
+        active_exists = "AND EXISTS (SELECT 1 FROM daily_prices active WHERE active.instrument_id = i.id AND active.trade_date = ?)"
+        params.append(trade_date)
     return conn.execute(
-        """
+        f"""
         SELECT i.id, i.symbol, COALESCE(i.name, i.symbol) AS name
         FROM stock_group_members m
         JOIN instruments i ON i.exchange = m.exchange AND i.symbol = m.symbol
         WHERE m.group_id = ? AND i.exchange = 'NSE' AND i.series = 'EQ' AND i.isin LIKE 'INE%'
+          {active_exists}
         ORDER BY i.symbol
         """,
-        (group,),
+        params,
     ).fetchall()
 
 
@@ -3183,19 +3206,40 @@ def latest_trade_date():
 
 
 def store_rule_daily_results(conn, trade_date, rules):
-    stocks = load_group_stocks(conn, "all")
+    for rule in rules:
+        conn.execute(
+            """
+            DELETE FROM rule_daily_results
+            WHERE trade_date = ? AND rule_id = ? AND rule_version = ? AND exchange = 'NSE'
+            """,
+            (trade_date, rule["id"], int(rule.get("version") or 1)),
+        )
+    stocks = load_group_stocks(conn, "all", trade_date)
     stored = 0
     for stock in stocks:
         rows = load_rows(conn, stock["id"])
         index = next((idx for idx, row in enumerate(rows) if row["trade_date"] == trade_date), None)
-        if index is None or index < 21:
+        if index is None or index < 20:
+            history_count = 0 if index is None else index + 1
+            reason = (
+                f"Only {history_count} NSE trading sessions are available; "
+                "at least 21 are required. This is usually a recent listing."
+                if index is not None
+                else "No NSE price was published for this stock on the selected trading date."
+            )
             for rule in rules:
                 result = {
                     "passed": False,
                     "symbol": stock["symbol"],
                     "name": stock["name"],
                     "date": trade_date,
-                    "reason": "No usable price history for this date.",
+                    "reason": reason,
+                    "reasons": [{
+                        "filter": "Price history",
+                        "passed": False,
+                        "availability": "unavailable",
+                        "reason": reason,
+                    }],
                 }
                 conn.execute(
                     """
