@@ -171,6 +171,20 @@ Experimental setup research is kept separate from recommendation groups:
 
 The setup and confirmation rules represent different stages and are intentionally not combined into a system recommendation group until broader backtesting is complete. All experimental filter thresholds remain user-editable in the Filter Library.
 
+Run the experimental setup deep backtest in the background:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start_experimental_deep_backtest.ps1
+```
+
+The launcher tests 2, 5, 10, 15, 20, and 30-day maximum holds with multiple target/stop combinations. It evaluates both the normal target-stop-time policy and a stop-or-time policy that holds until the stop is triggered or the maximum holding period expires. Progress and CSV/JSON results are written to `outputs`.
+
+Audit the active filter, rule, and recommendation-group inventory without changing it:
+
+```powershell
+python scripts\audit_strategy_inventory.py
+```
+
 Fundamental conditions use only filings broadcast by the signal date. Until historical financial and shareholding XBRL is backfilled, these rules will intentionally return limited or no historical matches rather than use future information.
 
 ## Backtesting
