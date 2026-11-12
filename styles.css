@@ -364,6 +364,33 @@ button:disabled {
   background: #fffdfa;
 }
 
+.failed-row {
+  background: #fffdfd;
+}
+
+.failure-reason {
+  min-width: 620px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.failure-line {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.failed-status {
+  border-color: #e8c8c8;
+  background: #fff3f3;
+  color: var(--negative);
+}
+
+.failure-detail {
+  border-left: 3px solid var(--negative);
+  padding-left: 12px;
+}
+
 .missing-reason {
   min-width: 520px;
   color: var(--muted);

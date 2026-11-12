@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from server import load_group_stocks, unavailable_history_result
+from server import failed_result, load_group_stocks, result_has_unavailable_data, unavailable_history_result
 
 
 class ActiveStockUniverseTests(unittest.TestCase):
@@ -73,6 +73,35 @@ class ActiveStockUniverseTests(unittest.TestCase):
         )
         self.assertIn("Only 8 NSE trading sessions", result["reason"])
         self.assertIn("recent listing", result["reason"])
+
+    def test_failed_result_preserves_rule_and_filter_reason(self):
+        result = failed_result({
+            "symbol": "TEST",
+            "failedRules": [{
+                "name": "Momentum Rule",
+                "reasons": [{
+                    "filter": "RSI 14",
+                    "passed": False,
+                    "availability": "available",
+                    "reason": "RSI 42; required 55-70.",
+                }],
+            }],
+        })
+        self.assertEqual(result["failures"][0]["rule"], "Momentum Rule")
+        self.assertEqual(result["failures"][0]["filter"], "RSI 14")
+
+    def test_nested_missing_rule_data_is_not_classified_as_failure(self):
+        result = {
+            "failedRules": [{
+                "reasons": [{
+                    "filter": "Annual Revenue Growth YoY",
+                    "passed": False,
+                    "availability": "unavailable",
+                    "reason": "Annual revenue growth is unavailable.",
+                }],
+            }],
+        }
+        self.assertTrue(result_has_unavailable_data(result))
 
 
 if __name__ == "__main__":

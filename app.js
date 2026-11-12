@@ -114,6 +114,7 @@ const state = {
   date: null,
   search: "",
   results: [],
+  failed: [],
   unavailable: [],
   coverage: {},
   resultView: "passed",
@@ -225,11 +226,14 @@ async function init() {
 
 function bindShell() {
   el.resultViewToggle.querySelectorAll("button[data-result-view]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       state.resultView = button.dataset.resultView;
+      const selectableRows = state.resultView === "failed" ? state.failed : state.resultView === "passed" ? state.results : [];
+      state.selectedSymbol = selectableRows.find((row) => row.symbol === state.selectedSymbol)?.symbol || selectableRows[0]?.symbol || null;
       renderCoverage();
       renderTable();
       renderDetails();
+      if (state.selectedSymbol) await selectStock(state.selectedSymbol);
     });
   });
   el.viewButtons.forEach((button) => {
@@ -664,6 +668,7 @@ function renderCoverage() {
   el.resultViewToggle.querySelectorAll("button[data-result-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.resultView === state.resultView);
     if (button.dataset.resultView === "passed") button.textContent = `Passed (${formatNumber(coverage.passed || 0)})`;
+    if (button.dataset.resultView === "failed") button.textContent = `Not passed (${formatNumber(coverage.failed || 0)})`;
     if (button.dataset.resultView === "unavailable") button.textContent = `Data unavailable (${formatNumber(coverage.unavailable || 0)})`;
   });
 }
@@ -774,8 +779,9 @@ function bindStockLabDraftActions() {
 function renderTable() {
   const sourceLabel = state.resultSource === "stored_eod" ? "Stored EOD" : state.resultSource === "live" ? "Live calculation" : "";
   const showingUnavailable = state.resultView === "unavailable";
-  const visibleRows = showingUnavailable ? state.unavailable : state.results;
-  el.resultsTitle.textContent = showingUnavailable ? "Stocks Missing Required Data" : "Stocks Passing Selection";
+  const showingFailed = state.resultView === "failed";
+  const visibleRows = showingUnavailable ? state.unavailable : showingFailed ? state.failed : state.results;
+  el.resultsTitle.textContent = showingUnavailable ? "Stocks Missing Required Data" : showingFailed ? "Stocks Not Passing Selection" : "Stocks Passing Selection";
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(visibleRows.length)} shown${sourceLabel ? ` - ${sourceLabel}` : ""}`;
   if (showingUnavailable) {
     if (!state.unavailable.length) {
@@ -791,6 +797,31 @@ function renderTable() {
         <td>${sourceBadges(item)}</td>
       </tr>
     `).join("");
+    return;
+  }
+  if (showingFailed) {
+    if (!state.failed.length) {
+      el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">No fully evaluated stocks failed this selection.</td></tr>`;
+      return;
+    }
+    el.resultsBody.innerHTML = state.failed.map((item) => {
+      const failures = item.failures || [];
+      const summary = failures.slice(0, 3).map((failure) => `
+        <span class="failure-line">${failure.rule ? `<strong>${escapeHtml(failure.rule)}:</strong> ` : ""}<strong>${escapeHtml(failure.filter)}:</strong> ${escapeHtml(failure.reason)}</span>
+      `).join("");
+      return `
+        <tr class="failed-row ${item.symbol === state.selectedSymbol ? "active" : ""}" data-symbol="${escapeHtml(item.symbol)}">
+          <td class="stock-name"><strong>${escapeHtml(item.symbol || "-")}</strong><span>${escapeHtml(item.name || "")}</span></td>
+          <td>${item.totalRules ? `<strong>${item.matchCount || 0}/${item.totalRules}</strong><span class="agreement-score">${formatPlainPct(item.weightedScore || 0)}</span>` : `<span class="data-status failed-status">Failed</span>`}</td>
+          <td>${item.close == null ? "N/A" : `Rs. ${formatMoney(item.close)}`}</td>
+          <td colspan="16" class="failure-reason">${summary || "The required rule agreement was not reached."}${failures.length > 3 ? `<span class="muted">+${failures.length - 3} more in stock detail</span>` : ""}</td>
+          <td>${sourceBadges(item)}</td>
+        </tr>
+      `;
+    }).join("");
+    el.resultsBody.querySelectorAll("tr[data-symbol]").forEach((row) => {
+      row.addEventListener("click", () => selectStock(row.dataset.symbol));
+    });
     return;
   }
   if (!state.results.length) {
@@ -833,16 +864,24 @@ function renderDetails() {
     el.details.innerHTML = `<div class="empty-state">Unavailable stocks are excluded because one or more required inputs could not be calculated. They have not failed the filter condition.</div>`;
     return;
   }
-  const item = state.results.find((row) => row.symbol === state.selectedSymbol);
+  const activeRows = state.resultView === "failed" ? state.failed : state.results;
+  const item = activeRows.find((row) => row.symbol === state.selectedSymbol);
   if (!item) {
     el.selectedTitle.textContent = "Stock detail";
     el.chart.innerHTML = "";
-    el.details.innerHTML = `<div class="empty-state">Select a stock to see why it passed.</div>`;
+    el.details.innerHTML = `<div class="empty-state">Select a stock to see why it ${state.resultView === "failed" ? "did not pass" : "passed"}.</div>`;
     return;
   }
   el.selectedTitle.textContent = `${item.symbol} - ${item.name}`;
   el.chart.innerHTML = lineChart(state.prices);
   el.details.innerHTML = `
+    ${state.resultView === "failed" ? `
+      <div class="detail-block failure-detail">
+        <h3>Why It Did Not Pass</h3>
+        <p>${item.totalRules ? `${item.matchCount || 0} of ${item.totalRules} rules passed. Rule-count threshold ${item.minMatches || 1}; weighted score ${formatPlainPct(item.weightedScore || 0)} versus required ${formatPlainPct(item.minWeightedScore || 0)}.` : "The rule stopped at the first unmet filter."}</p>
+        <ul>${(item.failures || []).map((failure) => `<li>${failure.rule ? `<strong>${escapeHtml(failure.rule)}:</strong> ` : ""}<strong>${escapeHtml(failure.filter)}</strong> - ${escapeHtml(failure.reason)}</li>`).join("") || "<li>The required rule agreement was not reached.</li>"}</ul>
+      </div>
+    ` : ""}
     ${item.totalRules ? `
       <div class="detail-block">
         <h3>Rule Group Match</h3>
@@ -938,11 +977,13 @@ async function runRuleScan(seq) {
   const result = await postJson("/api/rule/results", payload);
   if (seq !== state.scanSeq) return;
   state.results = result.results || [];
+  state.failed = result.failed || [];
   state.unavailable = result.unavailable || [];
   state.coverage = result.coverage || {};
   state.resultSource = result.source || "";
   state.metrics = result.metrics || {};
-  state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
+  const selectableRows = state.resultView === "failed" ? state.failed : state.resultView === "passed" ? state.results : [];
+  state.selectedSymbol = selectableRows.find((row) => row.symbol === state.selectedSymbol)?.symbol || selectableRows[0]?.symbol || null;
   if (state.selectedSymbol) {
     const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(state.selectedSymbol)}&date=${encodeURIComponent(state.date)}`);
     if (seq !== state.scanSeq) return;
@@ -1209,6 +1250,7 @@ async function runRuleGroupScan(seq) {
   const selectedRules = rulesForCurrentGroup();
   if (!selectedRules.length) {
     state.results = [];
+    state.failed = [];
     state.unavailable = [];
     state.coverage = {};
     state.metrics = {};
@@ -1232,11 +1274,13 @@ async function runRuleGroupScan(seq) {
   const result = await postJson("/api/rule-group/results", payload);
   if (seq !== state.scanSeq) return;
   state.results = result.results || [];
+  state.failed = result.failed || [];
   state.unavailable = result.unavailable || [];
   state.coverage = result.coverage || {};
   state.resultSource = result.source || "";
   state.metrics = result.metrics || {};
-  state.selectedSymbol = state.results.find((row) => row.symbol === state.selectedSymbol)?.symbol || state.results[0]?.symbol || null;
+  const selectableRows = state.resultView === "failed" ? state.failed : state.resultView === "passed" ? state.results : [];
+  state.selectedSymbol = selectableRows.find((row) => row.symbol === state.selectedSymbol)?.symbol || selectableRows[0]?.symbol || null;
   if (state.selectedSymbol) {
     const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(state.selectedSymbol)}&date=${encodeURIComponent(state.date)}`);
     if (seq !== state.scanSeq) return;

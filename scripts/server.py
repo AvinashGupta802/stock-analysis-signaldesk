@@ -734,6 +734,7 @@ def get_rule_results(payload):
         if stored:
             return stored
     rows = []
+    failed = []
     unavailable = []
     failed_count = 0
     universe_count = 0
@@ -749,6 +750,7 @@ def get_rule_results(payload):
             elif result_has_unavailable_data(result):
                 unavailable.append(unavailable_result(result))
             else:
+                failed.append(failed_result(result))
                 failed_count += 1
     rows.sort(key=lambda row: (row["volume"], row["symbol"]), reverse=True)
     return {
@@ -758,6 +760,7 @@ def get_rule_results(payload):
         "group": group,
         "total": len(rows),
         "results": rows[:limit],
+        "failed": failed[:limit],
         "unavailable": unavailable[:limit],
         "coverage": build_coverage(universe_count, len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
@@ -782,6 +785,7 @@ def get_rule_group_results(payload):
         if stored:
             return stored
     rows = []
+    failed = []
     unavailable = []
     failed_count = 0
     universe_count = 0
@@ -797,8 +801,10 @@ def get_rule_group_results(payload):
             elif result_has_unavailable_data(result):
                 unavailable.append(unavailable_result(result))
             else:
+                failed.append(failed_result(result))
                 failed_count += 1
     rows.sort(key=lambda row: (row["weightedScore"], row["matchCount"], row["volume"], row["symbol"]), reverse=True)
+    failed.sort(key=lambda row: (row.get("weightedScore") or 0, row.get("matchCount") or 0, row.get("volume") or 0), reverse=True)
     return {
         "rules": rules,
         "universeFilters": universe_filters,
@@ -807,6 +813,7 @@ def get_rule_group_results(payload):
         **scoring,
         "total": len(rows),
         "results": rows[:limit],
+        "failed": failed[:limit],
         "unavailable": unavailable[:limit],
         "coverage": build_coverage(universe_count, len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
@@ -822,6 +829,7 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
     if not group_symbols:
         return None
     rows = []
+    failed = []
     unavailable = []
     failed_count = 0
     universe_count = 0
@@ -839,12 +847,18 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
         if search and search not in result["symbol"].upper() and search not in (result.get("name") or "").upper():
             continue
         universe_count += 1
-        universe_passed = apply_stored_universe_filters(result, universe_filters) if result.get("close") is not None else False
+        universe_passed, universe_reasons = apply_universe_filters(
+            {"close": result.get("close") or 0}, universe_filters
+        ) if result.get("close") is not None else (False, [])
         if result.get("passed") and universe_passed:
             rows.append(result)
         elif result_has_unavailable_data(result):
             unavailable.append(unavailable_result(result))
         else:
+            failed_item = dict(result)
+            if not universe_passed:
+                failed_item["reasons"] = universe_reasons
+            failed.append(failed_result(failed_item))
             failed_count += 1
     if not rows and not has_stored_rule_date(conn, trade_date, stored_rule):
         return None
@@ -856,6 +870,7 @@ def get_stored_rule_results(conn, raw_rule, rule, universe_filters, group, trade
         "group": group,
         "total": len(rows),
         "results": rows[:limit],
+        "failed": failed[:limit],
         "unavailable": unavailable[:limit],
         "coverage": build_coverage(universe_count, len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
@@ -893,15 +908,19 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
                 continue
             item = by_symbol.setdefault(symbol, {**dict(rule_result), "matchedRules": [], "failedRuleResults": []})
             if not rule_result.get("passed"):
-                item["failedRuleResults"].append(rule_result)
+                item["failedRuleResults"].append({**rule_result, "ruleName": stored_rule["name"]})
                 continue
             matched_rules = item["matchedRules"]
             failed_results = item["failedRuleResults"]
             item.update(rule_result)
             item["matchedRules"] = matched_rules
             item["failedRuleResults"] = failed_results
-            if not apply_stored_universe_filters(rule_result, universe_filters):
+            universe_passed, universe_reasons = apply_universe_filters(
+                {"close": rule_result.get("close") or 0}, universe_filters
+            )
+            if not universe_passed:
                 item["universeFailed"] = True
+                item["universeReasons"] = universe_reasons
                 continue
             item.setdefault("matchedRules", [])
             item["matchedRules"].append(
@@ -913,6 +932,7 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
                 }
             )
     rows = []
+    failed = []
     unavailable = []
     failed_count = 0
     for item in by_symbol.values():
@@ -920,6 +940,13 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
         agreement = score_group_agreement(
             [rule["id"] for rule in item.get("matchedRules") or []], scoring
         )
+        item["matchCount"] = match_count
+        item["totalRules"] = len(rules)
+        item["minMatches"] = scoring["minMatches"]
+        item["matchedWeight"] = agreement["matchedWeight"]
+        item["totalWeight"] = scoring["totalWeight"]
+        item["weightedScore"] = agreement["weightedScore"]
+        item["minWeightedScore"] = scoring["minWeightedScore"]
         if not agreement["passed"] or item.get("universeFailed"):
             failed_results = item.get("failedRuleResults") or []
             if any(result_has_unavailable_data(result) for result in failed_results):
@@ -929,19 +956,16 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
                 ]
                 unavailable.append(unavailable_result(merged))
             else:
+                if item.get("universeFailed"):
+                    item["reasons"] = item.get("universeReasons") or []
+                failed.append(failed_result(item))
                 failed_count += 1
             continue
         item["passed"] = True
-        item["matchCount"] = match_count
-        item["totalRules"] = len(rules)
-        item["minMatches"] = scoring["minMatches"]
-        item["matchedWeight"] = agreement["matchedWeight"]
-        item["totalWeight"] = scoring["totalWeight"]
-        item["weightedScore"] = agreement["weightedScore"]
-        item["minWeightedScore"] = scoring["minWeightedScore"]
         item["reasons"] = item.get("matchedRules", [{}])[0].get("reasons", [])
         rows.append(item)
     rows.sort(key=lambda item: (item["weightedScore"], item["matchCount"], item.get("volume") or 0, item["symbol"]), reverse=True)
+    failed.sort(key=lambda item: (item.get("weightedScore") or 0, item.get("matchCount") or 0, item.get("volume") or 0), reverse=True)
     return {
         "rules": rules,
         "universeFilters": universe_filters,
@@ -950,6 +974,7 @@ def get_stored_rule_group_results(conn, raw_rules, rules, universe_filters, grou
         **scoring,
         "total": len(rows),
         "results": rows[:limit],
+        "failed": failed[:limit],
         "unavailable": unavailable[:limit],
         "coverage": build_coverage(len(by_symbol), len(rows), failed_count, len(unavailable)),
         "metrics": build_scan_metrics(rows),
@@ -2497,20 +2522,25 @@ def unavailable_reason(reason):
 def result_has_unavailable_data(result):
     if unavailable_reason(result.get("reason")):
         return True
-    return any(
+    if any(
         reason.get("availability") == "unavailable" or unavailable_reason(reason.get("reason"))
         for reason in result.get("reasons") or []
-    )
+    ):
+        return True
+    nested = list(result.get("failedRules") or []) + list(result.get("failedRuleResults") or [])
+    return any(result_has_unavailable_data(item) for item in nested)
 
 
 def unavailable_result(result):
     reasons = []
-    for reason in result.get("reasons") or []:
-        if reason.get("availability") == "unavailable" or unavailable_reason(reason.get("reason")):
-            reasons.append({
-                "filter": reason.get("filter") or "Required data",
-                "reason": reason.get("reason") or "Required data is unavailable.",
-            })
+    nested_results = [result] + list(result.get("failedRules") or []) + list(result.get("failedRuleResults") or [])
+    for nested in nested_results:
+        for reason in nested.get("reasons") or []:
+            if reason.get("availability") == "unavailable" or unavailable_reason(reason.get("reason")):
+                reasons.append({
+                    "filter": reason.get("filter") or "Required data",
+                    "reason": reason.get("reason") or "Required data is unavailable.",
+                })
     if not reasons and unavailable_reason(result.get("reason")):
         reasons.append({"filter": "Price history", "reason": result["reason"]})
     unique = []
@@ -2528,6 +2558,44 @@ def unavailable_result(result):
         "fundamentalSource": result.get("fundamentalSource"),
         "marketCapSource": result.get("marketCapSource"),
     }
+
+
+def failed_result(result):
+    failures = []
+    for reason in result.get("reasons") or []:
+        if not reason.get("passed") and reason.get("availability") != "unavailable":
+            failures.append({
+                "rule": None,
+                "filter": reason.get("filter") or "Selection condition",
+                "reason": reason.get("reason") or "Condition was not satisfied.",
+            })
+    for rule in result.get("failedRules") or []:
+        for reason in rule.get("reasons") or []:
+            if not reason.get("passed") and reason.get("availability") != "unavailable":
+                failures.append({
+                    "rule": rule.get("name"),
+                    "filter": reason.get("filter") or "Selection condition",
+                    "reason": reason.get("reason") or "Condition was not satisfied.",
+                })
+    for rule_result in result.get("failedRuleResults") or []:
+        for reason in rule_result.get("reasons") or []:
+            if not reason.get("passed") and reason.get("availability") != "unavailable":
+                failures.append({
+                    "rule": rule_result.get("ruleName"),
+                    "filter": reason.get("filter") or "Selection condition",
+                    "reason": reason.get("reason") or "Condition was not satisfied.",
+                })
+    unique = []
+    seen = set()
+    for failure in failures:
+        key = (failure["rule"], failure["filter"], failure["reason"])
+        if key not in seen:
+            unique.append(failure)
+            seen.add(key)
+    item = dict(result)
+    item["failures"] = unique
+    item.pop("failedRuleResults", None)
+    return item
 
 
 def unavailable_history_result(stock, trade_date, history_count=None):
