@@ -273,6 +273,48 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "short_pause_after_impulse",
+        "name": "Experimental: Short Pause After Impulse",
+        "category": "Experimental Setups",
+        "meaning": "Find stocks that made a strong up day recently, then paused in a tight, controlled range on quieter volume without giving back much of the move.",
+        "fields": [
+            {"key": "impulseLookbackSessions", "label": "Search impulse within sessions", "default": 6, "step": 1},
+            {"key": "minImpulseGainPct", "label": "Min impulse-day gain %", "default": 3, "step": 0.5},
+            {"key": "minPauseSessions", "label": "Min pause sessions", "default": 2, "step": 1},
+            {"key": "maxPauseSessions", "label": "Max pause sessions", "default": 5, "step": 1},
+            {"key": "maxPauseRangePct", "label": "Max pause close range %", "default": 4, "step": 0.5},
+            {"key": "maxDistanceFromPauseHighPct", "label": "Max distance below pause high %", "default": 2, "step": 0.5},
+            {"key": "maxPauseVolumeRatio", "label": "Max pause avg volume / 20D", "default": 1.3, "step": 0.1},
+            {"key": "requireAboveEma20", "label": "Require close above EMA20", "default": True, "type": "checkbox"},
+        ],
+    },
+    {
+        "id": "recent_pullback_recovery",
+        "name": "Experimental: Recent Pullback and Recovery",
+        "category": "Experimental Setups",
+        "meaning": "Find stocks that pulled back from a recent high, formed a local low, and have started recovering without already becoming extended.",
+        "fields": [
+            {"key": "pullbackLookbackSessions", "label": "Pullback lookback sessions", "default": 20, "step": 1},
+            {"key": "minPullbackPct", "label": "Min pullback from high %", "default": 5, "step": 0.5},
+            {"key": "maxPullbackPct", "label": "Max pullback from high %", "default": 20, "step": 0.5},
+            {"key": "maxSessionsSinceLow", "label": "Max sessions since local low", "default": 7, "step": 1},
+            {"key": "minRecoveryFromLowPct", "label": "Min recovery from low %", "default": 1, "step": 0.5},
+            {"key": "maxRecoveryFromLowPct", "label": "Max recovery from low %", "default": 8, "step": 0.5},
+        ],
+    },
+    {
+        "id": "base_tightness_volume_dryup",
+        "name": "Experimental: Base Tightness and Volume Dry-Up",
+        "category": "Experimental Setups",
+        "meaning": "Find short bases where closing prices are stable, average volume has contracted, and no large fresh decline has occurred during the base.",
+        "fields": [
+            {"key": "baseSessions", "label": "Base sessions", "default": 4, "step": 1},
+            {"key": "maxBaseCloseRangePct", "label": "Max base close range %", "default": 5, "step": 0.5},
+            {"key": "maxBaseVolumeRatio", "label": "Max base avg volume / 20D", "default": 1, "step": 0.1},
+            {"key": "maxBaseSingleDayDeclinePct", "label": "Max single-day decline %", "default": 3, "step": 0.5},
+        ],
+    },
+    {
         "id": "rupee_liquidity",
         "name": "Rupee Liquidity",
         "category": "Liquidity",
@@ -438,6 +480,56 @@ FUNDAMENTAL_SYSTEM_RULES = [
             {"id": "distance_from_52w_high", "values": {"minDistanceFrom52WHigh": 0, "maxDistanceFrom52WHigh": 15}},
             {"id": "rsi14_range", "values": {"rsiMin": 55, "rsiMax": 100}},
             {"id": "relative_strength_nifty500_3m", "values": {"minRelativeStrengthNifty5003M": 5, "maxRelativeStrengthNifty5003M": 999}},
+        ],
+    },
+]
+
+EXPERIMENTAL_SETUP_RULES = [
+    {
+        "id": "rule_experimental_impulse_pause_setup",
+        "name": "Experimental: Impulse Pause Setup",
+        "description": "Early watch signal for a strong recent up day followed by a controlled, low-volume pause near the short-term high.",
+        "filters": [
+            {"id": "short_pause_after_impulse", "values": {
+                "impulseLookbackSessions": 6, "minImpulseGainPct": 3,
+                "minPauseSessions": 2, "maxPauseSessions": 5,
+                "maxPauseRangePct": 4, "maxDistanceFromPauseHighPct": 2,
+                "maxPauseVolumeRatio": 1.3, "requireAboveEma20": True,
+            }},
+            {"id": "close_near_20d_high", "values": {"maxDistanceFrom20DHigh": 6}},
+            {"id": "rsi14_range", "values": {"rsiMin": 50, "rsiMax": 68}},
+            {"id": "price_momentum_3d", "values": {"minMomentum3D": -2, "maxMomentum3D": 4}},
+            {"id": "atr_risk", "values": {"minAtrPct": 0, "maxAtrPct": 8}},
+        ],
+    },
+    {
+        "id": "rule_experimental_pullback_base_reversal",
+        "name": "Experimental: Pullback Base Reversal",
+        "description": "Early watch signal for a stock stabilizing on quieter volume after a meaningful pullback and beginning a controlled recovery.",
+        "filters": [
+            {"id": "recent_pullback_recovery", "values": {
+                "pullbackLookbackSessions": 20, "minPullbackPct": 5, "maxPullbackPct": 20,
+                "maxSessionsSinceLow": 7, "minRecoveryFromLowPct": 1, "maxRecoveryFromLowPct": 8,
+            }},
+            {"id": "base_tightness_volume_dryup", "values": {
+                "baseSessions": 4, "maxBaseCloseRangePct": 5,
+                "maxBaseVolumeRatio": 1, "maxBaseSingleDayDeclinePct": 3,
+            }},
+            {"id": "rsi14_range", "values": {"rsiMin": 30, "rsiMax": 55}},
+            {"id": "price_momentum_3d", "values": {"minMomentum3D": -2, "maxMomentum3D": 4}},
+            {"id": "atr_risk", "values": {"minAtrPct": 0, "maxAtrPct": 8}},
+        ],
+    },
+    {
+        "id": "rule_experimental_base_breakout_confirmation",
+        "name": "Experimental: Base Breakout Confirmation",
+        "description": "Confirmation signal for the first strong price expansion supported by exceptional volume and delivered quantity.",
+        "filters": [
+            {"id": "price_change_1d", "values": {"minPriceChange1D": 3, "maxPriceChange1D": 12}},
+            {"id": "relative_volume", "values": {"minRelativeVolume": 1.5, "maxRelativeVolume": 999}},
+            {"id": "relative_delivery_qty", "values": {"minRelativeDelivery": 1.5, "maxRelativeDelivery": 999}},
+            {"id": "close_near_20d_high", "values": {"maxDistanceFrom20DHigh": 8}},
+            {"id": "rsi14_range", "values": {"rsiMin": 50, "rsiMax": 85}},
         ],
     },
 ]
@@ -1919,6 +2011,89 @@ def evaluate_filter(ctx, selected):
         max_compression = float(values.get("maxCompression10D", 12))
         passed = min_compression <= ctx["compression_10d"] <= max_compression
         return passed, f"10D range compression {ctx['compression_10d']:.2f}%; required {min_compression:g}%-{max_compression:g}%."
+    if filter_id == "short_pause_after_impulse":
+        rows = ctx.get("_rows") or []
+        index = int(ctx.get("_index", len(rows) - 1))
+        lookback = max(2, int(values.get("impulseLookbackSessions", 6)))
+        min_impulse = float(values.get("minImpulseGainPct", 3))
+        min_pause = max(1, int(values.get("minPauseSessions", 2)))
+        max_pause = max(min_pause, int(values.get("maxPauseSessions", 5)))
+        max_range = float(values.get("maxPauseRangePct", 4))
+        max_distance = float(values.get("maxDistanceFromPauseHighPct", 2))
+        max_volume = float(values.get("maxPauseVolumeRatio", 1.3))
+        require_above_ema = bool(values.get("requireAboveEma20", True))
+        candidates = []
+        for impulse_index in range(max(1, index - lookback), index):
+            gain = pct(rows[impulse_index]["close"], rows[impulse_index - 1]["close"])
+            pause_sessions = index - impulse_index
+            if gain >= min_impulse and min_pause <= pause_sessions <= max_pause:
+                candidates.append((impulse_index, gain, pause_sessions))
+        if not candidates:
+            return False, f"No >= {min_impulse:g}% impulse day was followed by a {min_pause}-{max_pause} session pause within the last {lookback} sessions."
+        impulse_index, impulse_gain, pause_sessions = candidates[-1]
+        pause_rows = rows[impulse_index + 1:index + 1]
+        pause_closes = [row["close"] for row in pause_rows]
+        pause_high = max(pause_closes)
+        pause_low = min(pause_closes)
+        pause_range = ((pause_high - pause_low) / pause_high) * 100 if pause_high else 0
+        distance = max(0, -pct(ctx["close"], pause_high))
+        pause_volume_ratio = relative_to_avg(avg([row["volume"] for row in pause_rows]), ctx.get("adv20"))
+        above_ema = ctx["close"] >= ctx.get("ema20", 0)
+        passed = pause_range <= max_range and distance <= max_distance and pause_volume_ratio <= max_volume and (above_ema or not require_above_ema)
+        return passed, (
+            f"Impulse {impulse_gain:+.2f}% occurred {pause_sessions} sessions ago; pause close range {pause_range:.2f}%, "
+            f"close {distance:.2f}% below pause high, pause volume {pause_volume_ratio:.2f}x 20D average, "
+            f"close {'above' if above_ema else 'below'} EMA20. Required range <= {max_range:g}%, distance <= {max_distance:g}%, "
+            f"volume <= {max_volume:g}x{' and close above EMA20' if require_above_ema else ''}."
+        )
+    if filter_id == "recent_pullback_recovery":
+        rows = ctx.get("_rows") or []
+        index = int(ctx.get("_index", len(rows) - 1))
+        lookback = max(3, int(values.get("pullbackLookbackSessions", 20)))
+        min_pullback = float(values.get("minPullbackPct", 5))
+        max_pullback = float(values.get("maxPullbackPct", 20))
+        max_since_low = max(1, int(values.get("maxSessionsSinceLow", 7)))
+        min_recovery = float(values.get("minRecoveryFromLowPct", 1))
+        max_recovery = float(values.get("maxRecoveryFromLowPct", 8))
+        start = max(0, index - lookback)
+        window = rows[start:index + 1]
+        high_offset = max(range(len(window)), key=lambda offset: window[offset]["close"])
+        low_offset = high_offset + min(
+            range(len(window) - high_offset),
+            key=lambda offset: window[high_offset + offset]["close"],
+        )
+        low_index = start + low_offset
+        low_close = rows[low_index]["close"]
+        prior_high = window[high_offset]["close"]
+        pullback = max(0, -pct(low_close, prior_high))
+        recovery = pct(ctx["close"], low_close)
+        since_low = index - low_index
+        passed = min_pullback <= pullback <= max_pullback and since_low <= max_since_low and min_recovery <= recovery <= max_recovery
+        return passed, (
+            f"Recent pullback {pullback:.2f}%, local low {since_low} sessions ago, recovery {recovery:+.2f}%. "
+            f"Required pullback {min_pullback:g}%-{max_pullback:g}%, low within {max_since_low} sessions, "
+            f"recovery {min_recovery:g}%-{max_recovery:g}%."
+        )
+    if filter_id == "base_tightness_volume_dryup":
+        rows = ctx.get("_rows") or []
+        index = int(ctx.get("_index", len(rows) - 1))
+        sessions = max(2, int(values.get("baseSessions", 4)))
+        max_range = float(values.get("maxBaseCloseRangePct", 5))
+        max_volume = float(values.get("maxBaseVolumeRatio", 1))
+        max_decline = float(values.get("maxBaseSingleDayDeclinePct", 3))
+        base_rows = rows[max(0, index - sessions + 1):index + 1]
+        closes = [row["close"] for row in base_rows]
+        high_close = max(closes)
+        base_range = ((high_close - min(closes)) / high_close) * 100 if high_close else 0
+        volume_ratio = relative_to_avg(avg([row["volume"] for row in base_rows]), ctx.get("adv20"))
+        declines = [max(0, -pct(closes[offset], closes[offset - 1])) for offset in range(1, len(closes))]
+        worst_decline = max(declines, default=0)
+        passed = base_range <= max_range and volume_ratio <= max_volume and worst_decline <= max_decline
+        return passed, (
+            f"{len(base_rows)}-session base close range {base_range:.2f}%, average volume {volume_ratio:.2f}x 20D, "
+            f"worst one-day decline {worst_decline:.2f}%. Required range <= {max_range:g}%, volume <= {max_volume:g}x, "
+            f"decline <= {max_decline:g}%."
+        )
     if filter_id == "rupee_liquidity":
         min_liquidity = float(values.get("minRupeeLiquidityCr", 20))
         max_liquidity = float(values.get("maxRupeeLiquidityCr", 999999))
@@ -2192,6 +2367,8 @@ def build_context(rows, index):
     momentum_3m = lookback_pct(rows, index, 63)
     benchmark_momentum_3m = nifty500_momentum_3m(current["trade_date"])
     return {
+        "_rows": rows,
+        "_index": index,
         "date": current["trade_date"],
         "history_count": index + 1,
         "close": current["close"],
@@ -2385,6 +2562,8 @@ def build_indicators(rows):
 def build_backtest_context(rows, indicators, index):
     current = rows[index]
     return {
+        "_rows": rows,
+        "_index": index,
         "date": current["trade_date"],
         "history_count": index + 1,
         "close": current["close"],
@@ -2975,7 +3154,7 @@ def ensure_strategy_schema(conn):
 
 
 def ensure_fundamental_system_rules(conn):
-    for rule in FUNDAMENTAL_SYSTEM_RULES:
+    for rule in FUNDAMENTAL_SYSTEM_RULES + EXPERIMENTAL_SETUP_RULES:
         version = int(rule.get("version", 1))
         conn.execute(
             """

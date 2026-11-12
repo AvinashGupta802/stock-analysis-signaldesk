@@ -163,6 +163,14 @@ Two system rules reproduce the referenced scans:
 - `Early Volume Signs`: market cap Rs. 2,000-50,000 crore, volume SMA10 at least 1.3x SMA20, and one-week return at least 2%.
 - `Early Growth & Relative Strength`: market cap at least Rs. 500 crore, revenue growth at least 15%, PAT growth at least 20%, ROCE at least 15%, debt-to-equity at most 1.2, close above SMA50, SMA50 above SMA200, within 15% of the 52-week high, RSI at least 55, and three-month outperformance versus Nifty 500 of at least 5 percentage points.
 
+Experimental setup research is kept separate from recommendation groups:
+
+- `Experimental: Impulse Pause Setup` looks for a recent strong up day followed by a controlled, low-volume pause near its short-term high.
+- `Experimental: Pullback Base Reversal` looks for stabilization and an early recovery after a meaningful pullback, using base tightness and volume dry-up.
+- `Experimental: Base Breakout Confirmation` looks for the first strong expansion day supported by relative volume and delivered quantity.
+
+The setup and confirmation rules represent different stages and are intentionally not combined into a system recommendation group until broader backtesting is complete. All experimental filter thresholds remain user-editable in the Filter Library.
+
 Fundamental conditions use only filings broadcast by the signal date. Until historical financial and shareholding XBRL is backfilled, these rules will intentionally return limited or no historical matches rather than use future information.
 
 ## Backtesting
