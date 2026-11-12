@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SignalDesk Rule Builder</title>
-    <link rel="stylesheet" href="./styles.css?v=builder-41" />
+    <link rel="stylesheet" href="./styles.css?v=builder-42" />
   </head>
   <body>
     <main class="app-shell">
@@ -24,31 +24,6 @@
           <button class="view-tab" type="button" data-view-button="groups">Rule Groups</button>
           <button class="view-tab" type="button" data-view-button="stocklab">Stock Lab</button>
         </nav>
-
-        <section class="panel compact" data-view-section="analyze">
-          <label for="analysisModeSelect">Analyze using</label>
-          <select id="analysisModeSelect">
-            <option value="group">Recommendation group</option>
-            <option value="rule">Single rule</option>
-          </select>
-          <label id="analysisRuleLabel" for="analysisRuleSelect">Single rule</label>
-          <select id="analysisRuleSelect"></select>
-          <label id="analysisGroupLabel" for="analysisRuleGroupSelect">Recommendation group</label>
-          <select id="analysisRuleGroupSelect"></select>
-          <label class="inline-toggle">
-            <input id="applyPriceFilterInput" type="checkbox" />
-            <span>Apply Price Filter</span>
-          </label>
-          <div class="input-grid two-col">
-            <label>Min price
-              <input id="minUniversePriceInput" type="number" min="0" step="1" value="100" />
-            </label>
-            <label>Max price
-              <input id="maxUniversePriceInput" type="number" min="0" step="1" value="1000" />
-            </label>
-          </div>
-          <p class="helper-text">Stock group is filtered first. Price filter is applied only when this checkbox is on.</p>
-        </section>
 
         <section class="panel compact" data-view-section="rules">
           <label for="ruleSelect">Single rule</label>
@@ -78,11 +53,6 @@
           </div>
         </section>
 
-        <section class="panel compact" data-view-section="analyze">
-          <label for="groupSelect">Stock group</label>
-          <select id="groupSelect"></select>
-        </section>
-
         <section class="panel compact" data-view-section="stockgroups">
           <label for="combinedGroupNameInput">New combined group name</label>
           <input id="combinedGroupNameInput" type="text" placeholder="Example: My Index Watchlist" autocomplete="off" />
@@ -92,16 +62,6 @@
           <div id="stockGroupSources" class="check-list"></div>
           <button id="createCombinedGroupButton" type="button">Create combined group</button>
           <p id="stockGroupStatus" class="helper-text"></p>
-        </section>
-
-        <section class="panel compact" data-view-section="analyze">
-          <label for="dateSelect">Signal date</label>
-          <select id="dateSelect"></select>
-        </section>
-
-        <section class="panel compact" data-view-section="analyze">
-          <label for="searchInput">Find stock</label>
-          <input id="searchInput" type="search" placeholder="Search symbol or name" autocomplete="off" />
         </section>
 
         <section class="panel rule-config" data-view-section="rules">
@@ -116,35 +76,6 @@
             <h2>Selected Filters</h2>
           </div>
           <div id="selectedFilters"></div>
-        </section>
-
-        <section class="panel compact" data-view-section="analyze">
-          <label>Backtest setup</label>
-          <div class="input-grid two-col">
-            <label>From
-              <input id="fromDateInput" type="date" />
-            </label>
-            <label>To
-              <input id="toDateInput" type="date" />
-            </label>
-            <label>Top N
-              <input id="topNInput" type="number" min="1" step="1" value="10" />
-            </label>
-            <label>Capital
-              <input id="capitalInput" type="number" min="0" step="1000" value="10000" />
-            </label>
-            <label>Target %
-              <input id="targetInput" type="number" min="0" step="0.5" value="5" />
-            </label>
-            <label>Stop %
-              <input id="stopInput" type="number" min="0" step="0.5" value="5" />
-            </label>
-            <label>Max hold days
-              <input id="maxHoldInput" type="number" min="1" max="30" step="1" value="5" />
-            </label>
-          </div>
-          <button id="backtestButton" type="button">Backtest selection</button>
-          <p id="statusText" class="helper-text">Connecting to SQLite...</p>
         </section>
 
         <section class="panel compact" data-view-section="stocklab">
@@ -187,6 +118,56 @@
           </div>
         </header>
 
+        <section class="analysis-toolbar" data-view-section="analyze" aria-label="Analysis controls">
+          <label class="toolbar-field mode-field">Analyze using
+            <select id="analysisModeSelect">
+              <option value="group">Recommendation group</option>
+              <option value="rule">Single rule</option>
+            </select>
+          </label>
+          <label id="analysisRuleLabel" class="toolbar-field rule-field">Single rule
+            <select id="analysisRuleSelect"></select>
+          </label>
+          <label id="analysisGroupLabel" class="toolbar-field rule-field">Recommendation group
+            <select id="analysisRuleGroupSelect"></select>
+          </label>
+          <label class="toolbar-field group-field">Stock group
+            <select id="groupSelect"></select>
+          </label>
+          <label class="toolbar-field date-field">Signal date
+            <select id="dateSelect"></select>
+          </label>
+          <label class="toolbar-field search-field">Find stock
+            <input id="searchInput" type="search" placeholder="Symbol or name" autocomplete="off" />
+          </label>
+          <label class="toolbar-toggle toolbar-price-toggle">
+            <input id="applyPriceFilterInput" type="checkbox" />
+            <span>Price filter</span>
+          </label>
+          <label class="toolbar-field price-field">Min
+            <input id="minUniversePriceInput" type="number" min="0" step="1" value="100" />
+          </label>
+          <label class="toolbar-field price-field">Max
+            <input id="maxUniversePriceInput" type="number" min="0" step="1" value="1000" />
+          </label>
+          <details class="backtest-menu">
+            <summary>Backtest</summary>
+            <div class="backtest-menu-content backtest-popover">
+              <div class="input-grid two-col">
+                <label>From<input id="fromDateInput" type="date" /></label>
+                <label>To<input id="toDateInput" type="date" /></label>
+                <label>Top N<input id="topNInput" type="number" min="1" step="1" value="10" /></label>
+                <label>Capital<input id="capitalInput" type="number" min="0" step="1000" value="10000" /></label>
+                <label>Target %<input id="targetInput" type="number" min="0" step="0.5" value="5" /></label>
+                <label>Stop %<input id="stopInput" type="number" min="0" step="0.5" value="5" /></label>
+                <label>Max hold days<input id="maxHoldInput" type="number" min="1" max="30" step="1" value="5" /></label>
+              </div>
+              <button id="backtestButton" type="button">Run backtest</button>
+            </div>
+          </details>
+          <p id="statusText" class="toolbar-status">Connecting to SQLite...</p>
+        </section>
+
         <section class="metrics-grid" id="metricsGrid"></section>
 
         <section class="coverage-strip" id="coveragePanel" aria-live="polite"></section>
@@ -194,7 +175,7 @@
         <section class="content-grid" id="analysisWorkspace">
           <div class="recommendations">
             <div class="section-title">
-              <div>
+              <div class="results-heading">
                 <h2 id="resultsTitle">Stocks Passing Selection</h2>
                 <span id="resultMeta"></span>
               </div>
@@ -203,32 +184,49 @@
                 <button type="button" data-result-view="failed">Not passed</button>
                 <button type="button" data-result-view="unavailable">Data unavailable</button>
               </div>
+              <div class="result-tools">
+                <label>View
+                  <select id="columnPresetSelect">
+                    <option value="recommendation">Recommendation</option>
+                    <option value="participation">Participation</option>
+                    <option value="priceAction">Price Action</option>
+                    <option value="trendRisk">Trend &amp; Risk</option>
+                    <option value="all">All Columns</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                <details class="column-menu">
+                  <summary>Columns</summary>
+                  <div id="columnChooser" class="column-chooser"></div>
+                </details>
+                <button id="openDetailsButton" type="button">Details</button>
+              </div>
             </div>
             <div id="backtestSummary" class="backtest-summary"></div>
-            <div class="table-wrap">
-              <table>
+            <div class="table-wrap analysis-table-wrap">
+              <table id="resultsTable">
                 <thead>
                   <tr>
-                    <th>Stock</th>
-                    <th>Agreement</th>
-                    <th>Close</th>
-                    <th>Volume</th>
-                    <th>Vol/20D</th>
-                    <th>Delivery %</th>
-                    <th>Del/20D</th>
-                    <th>3D %</th>
-                    <th>15D %</th>
-                    <th>Day Pos</th>
-                    <th>10D Comp</th>
-                    <th>20D High</th>
-                    <th>52W Pos</th>
-                    <th>OBV/20D</th>
-                    <th>20D ADV</th>
-                    <th>Rupee Liq</th>
-                    <th>1Y %</th>
-                    <th>RSI</th>
-                    <th>ATR %</th>
-                    <th>Next day</th>
+                    <th data-column="stock">Stock</th>
+                    <th data-column="agreement">Agreement</th>
+                    <th data-column="close">Close</th>
+                    <th data-column="volume">Volume</th>
+                    <th data-column="relativeVolume">Vol/20D</th>
+                    <th data-column="deliveryPct">Delivery %</th>
+                    <th data-column="relativeDelivery">Del/20D</th>
+                    <th data-column="momentum3D">3D %</th>
+                    <th data-column="momentum15D">15D %</th>
+                    <th data-column="dayPosition">Day Pos</th>
+                    <th data-column="compression10D">10D Comp</th>
+                    <th data-column="high20D">20D High</th>
+                    <th data-column="range52W">52W Pos</th>
+                    <th data-column="obv20D">OBV/20D</th>
+                    <th data-column="adv20">20D ADV</th>
+                    <th data-column="rupeeLiquidity">Rupee Liq</th>
+                    <th data-column="momentum1Y">1Y %</th>
+                    <th data-column="rsi14">RSI</th>
+                    <th data-column="atrPct">ATR %</th>
+                    <th data-column="nextDay">Next day</th>
                   </tr>
                 </thead>
                 <tbody id="resultsBody"></tbody>
@@ -236,9 +234,11 @@
             </div>
           </div>
 
-          <aside class="details-panel">
+          <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+          <aside id="detailsPanel" class="details-panel details-drawer" aria-hidden="true">
             <div class="section-title">
               <h2 id="selectedTitle">Rule Meaning</h2>
+              <button id="closeDetailsButton" class="icon-button" type="button" aria-label="Close details" title="Close details">&times;</button>
             </div>
             <div id="ruleMeaning" class="stock-details"></div>
             <div id="chart" class="chart"></div>
@@ -293,6 +293,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=builder-41"></script>
+    <script src="./app.js?v=builder-42"></script>
   </body>
 </html>

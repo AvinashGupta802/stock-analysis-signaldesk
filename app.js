@@ -1,6 +1,23 @@
 const STORAGE_KEY = "signaldesk.buyRules.v1";
 const RULE_GROUP_STORAGE_KEY = "signaldesk.ruleGroups.v1";
 
+const RESULT_COLUMNS = [
+  ["stock", "Stock"], ["agreement", "Agreement"], ["close", "Close"], ["volume", "Volume"],
+  ["relativeVolume", "Vol/20D"], ["deliveryPct", "Delivery %"], ["relativeDelivery", "Del/20D"],
+  ["momentum3D", "3D %"], ["momentum15D", "15D %"], ["dayPosition", "Day Pos"],
+  ["compression10D", "10D Comp"], ["high20D", "20D High"], ["range52W", "52W Pos"],
+  ["obv20D", "OBV/20D"], ["adv20", "20D ADV"], ["rupeeLiquidity", "Rupee Liq"],
+  ["momentum1Y", "1Y %"], ["rsi14", "RSI"], ["atrPct", "ATR %"], ["nextDay", "Next day"],
+];
+
+const COLUMN_PRESETS = {
+  recommendation: ["stock", "agreement", "close", "relativeVolume", "relativeDelivery", "momentum3D", "rsi14", "nextDay"],
+  participation: ["stock", "agreement", "close", "volume", "relativeVolume", "deliveryPct", "relativeDelivery", "adv20", "rupeeLiquidity"],
+  priceAction: ["stock", "agreement", "close", "momentum3D", "momentum15D", "dayPosition", "compression10D", "high20D", "range52W", "momentum1Y", "nextDay"],
+  trendRisk: ["stock", "agreement", "close", "momentum3D", "momentum15D", "range52W", "momentum1Y", "rsi14", "atrPct", "nextDay"],
+  all: RESULT_COLUMNS.map(([key]) => key),
+};
+
 const FILTER_EXPLANATIONS = {
   adv20_min: [
     "20D Average Volume is the average number of shares traded per day over the last 20 trading sessions.",
@@ -118,6 +135,9 @@ const state = {
   unavailable: [],
   coverage: {},
   resultView: "passed",
+  columnPreset: "recommendation",
+  visibleColumns: [...COLUMN_PRESETS.recommendation],
+  detailsOpen: false,
   resultSource: "",
   metrics: {},
   prices: [],
@@ -195,6 +215,13 @@ const el = {
   coveragePanel: document.querySelector("#coveragePanel"),
   resultsTitle: document.querySelector("#resultsTitle"),
   resultViewToggle: document.querySelector("#resultViewToggle"),
+  columnPresetSelect: document.querySelector("#columnPresetSelect"),
+  columnChooser: document.querySelector("#columnChooser"),
+  resultsTable: document.querySelector("#resultsTable"),
+  openDetailsButton: document.querySelector("#openDetailsButton"),
+  closeDetailsButton: document.querySelector("#closeDetailsButton"),
+  detailsPanel: document.querySelector("#detailsPanel"),
+  drawerBackdrop: document.querySelector("#drawerBackdrop"),
   resultMeta: document.querySelector("#resultMeta"),
   backtestSummary: document.querySelector("#backtestSummary"),
   resultsBody: document.querySelector("#resultsBody"),
@@ -225,6 +252,18 @@ async function init() {
 }
 
 function bindShell() {
+  el.columnPresetSelect.addEventListener("change", () => {
+    state.columnPreset = el.columnPresetSelect.value;
+    if (COLUMN_PRESETS[state.columnPreset]) state.visibleColumns = [...COLUMN_PRESETS[state.columnPreset]];
+    renderColumnControls();
+    applyColumnVisibility();
+  });
+  el.openDetailsButton.addEventListener("click", () => openDetails());
+  el.closeDetailsButton.addEventListener("click", closeDetails);
+  el.drawerBackdrop.addEventListener("click", closeDetails);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.detailsOpen) closeDetails();
+  });
   el.resultViewToggle.querySelectorAll("button[data-result-view]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.resultView = button.dataset.resultView;
@@ -233,7 +272,8 @@ function bindShell() {
       renderCoverage();
       renderTable();
       renderDetails();
-      if (state.selectedSymbol) await selectStock(state.selectedSymbol);
+      if (state.resultView === "unavailable") closeDetails();
+      if (state.selectedSymbol) await selectStock(state.selectedSymbol, false);
     });
   });
   el.viewButtons.forEach((button) => {
@@ -392,6 +432,7 @@ function renderAll() {
   renderStockLabControls();
   renderMetrics();
   renderCoverage();
+  renderColumnControls();
   renderTable();
   renderDetails();
   renderBacktest();
@@ -399,6 +440,7 @@ function renderAll() {
 }
 
 function renderView() {
+  document.body.dataset.view = state.view;
   el.viewButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.viewButton === state.view);
   });
@@ -410,6 +452,7 @@ function renderView() {
   el.coveragePanel.hidden = showingStockLab;
   el.analysisWorkspace.hidden = showingStockLab;
   el.stockLabWorkspace.hidden = !showingStockLab;
+  if (state.view !== "analyze") closeDetails();
 }
 
 function renderAnalysisSelectors() {
@@ -776,32 +819,79 @@ function bindStockLabDraftActions() {
   });
 }
 
+function renderColumnControls() {
+  const auditView = state.resultView !== "passed";
+  el.columnPresetSelect.value = state.columnPreset;
+  el.columnPresetSelect.disabled = auditView;
+  el.columnChooser.closest("details").hidden = auditView;
+  el.columnChooser.innerHTML = RESULT_COLUMNS.map(([key, label]) => `
+    <label><input type="checkbox" value="${key}" ${state.visibleColumns.includes(key) ? "checked" : ""} />${escapeHtml(label)}</label>
+  `).join("");
+  el.columnChooser.querySelectorAll("input[type='checkbox']").forEach((input) => {
+    input.addEventListener("change", () => {
+      const checked = Array.from(el.columnChooser.querySelectorAll("input:checked")).map((item) => item.value);
+      state.visibleColumns = checked.includes("stock") ? checked : ["stock", ...checked];
+      state.columnPreset = "custom";
+      el.columnPresetSelect.value = "custom";
+      applyColumnVisibility();
+    });
+  });
+}
+
+function applyColumnVisibility() {
+  const visible = new Set(state.resultView === "passed" ? state.visibleColumns : ["stock", "agreement", "close"]);
+  el.resultsTable.querySelectorAll("[data-column]").forEach((cell) => {
+    cell.hidden = !visible.has(cell.dataset.column);
+  });
+}
+
+function openDetails() {
+  if (state.resultView === "unavailable") return;
+  state.detailsOpen = true;
+  el.detailsPanel.classList.add("open");
+  el.detailsPanel.setAttribute("aria-hidden", "false");
+  el.drawerBackdrop.hidden = false;
+}
+
+function closeDetails() {
+  state.detailsOpen = false;
+  el.detailsPanel.classList.remove("open");
+  el.detailsPanel.setAttribute("aria-hidden", "true");
+  el.drawerBackdrop.hidden = true;
+}
+
 function renderTable() {
   const sourceLabel = state.resultSource === "stored_eod" ? "Stored EOD" : state.resultSource === "live" ? "Live calculation" : "";
   const showingUnavailable = state.resultView === "unavailable";
   const showingFailed = state.resultView === "failed";
   const visibleRows = showingUnavailable ? state.unavailable : showingFailed ? state.failed : state.results;
+  el.columnPresetSelect.disabled = showingUnavailable || showingFailed;
+  el.columnChooser.closest("details").hidden = showingUnavailable || showingFailed;
+  el.openDetailsButton.disabled = showingUnavailable || !state.selectedSymbol;
   el.resultsTitle.textContent = showingUnavailable ? "Stocks Missing Required Data" : showingFailed ? "Stocks Not Passing Selection" : "Stocks Passing Selection";
   el.resultMeta.textContent = `${formatDate(state.date)} close - ${formatNumber(visibleRows.length)} shown${sourceLabel ? ` - ${sourceLabel}` : ""}`;
   if (showingUnavailable) {
     if (!state.unavailable.length) {
       el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">Every stock in this selection had the required data.</td></tr>`;
+      applyColumnVisibility();
       return;
     }
     el.resultsBody.innerHTML = state.unavailable.map((item) => `
       <tr class="unavailable-row">
-        <td class="stock-name"><strong>${escapeHtml(item.symbol || "-")}</strong><span>${escapeHtml(item.name || "")}</span></td>
-        <td><span class="data-status unavailable-status">Unavailable</span></td>
-        <td>${item.close == null ? "N/A" : `Rs. ${formatMoney(item.close)}`}</td>
+        <td data-column="stock" class="stock-name"><strong>${escapeHtml(item.symbol || "-")}</strong><span title="${escapeHtml(item.name || "")}">${escapeHtml(item.name || "")}</span></td>
+        <td data-column="agreement"><span class="data-status unavailable-status">Unavailable</span></td>
+        <td data-column="close">${item.close == null ? "N/A" : `Rs. ${formatMoney(item.close)}`}</td>
         <td colspan="16" class="missing-reason">${(item.missing || []).map((reason) => `<strong>${escapeHtml(reason.filter)}:</strong> ${escapeHtml(reason.reason)}`).join(" ") || "Required history is unavailable."}</td>
         <td>${sourceBadges(item)}</td>
       </tr>
     `).join("");
+    applyColumnVisibility();
     return;
   }
   if (showingFailed) {
     if (!state.failed.length) {
       el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">No fully evaluated stocks failed this selection.</td></tr>`;
+      applyColumnVisibility();
       return;
     }
     el.resultsBody.innerHTML = state.failed.map((item) => {
@@ -811,9 +901,9 @@ function renderTable() {
       `).join("");
       return `
         <tr class="failed-row ${item.symbol === state.selectedSymbol ? "active" : ""}" data-symbol="${escapeHtml(item.symbol)}">
-          <td class="stock-name"><strong>${escapeHtml(item.symbol || "-")}</strong><span>${escapeHtml(item.name || "")}</span></td>
-          <td>${item.totalRules ? `<strong>${item.matchCount || 0}/${item.totalRules}</strong><span class="agreement-score">${formatPlainPct(item.weightedScore || 0)}</span>` : `<span class="data-status failed-status">Failed</span>`}</td>
-          <td>${item.close == null ? "N/A" : `Rs. ${formatMoney(item.close)}`}</td>
+          <td data-column="stock" class="stock-name"><strong>${escapeHtml(item.symbol || "-")}</strong><span title="${escapeHtml(item.name || "")}">${escapeHtml(item.name || "")}</span></td>
+          <td data-column="agreement">${item.totalRules ? `<strong>${item.matchCount || 0}/${item.totalRules}</strong><span class="agreement-score">${formatPlainPct(item.weightedScore || 0)}</span>` : `<span class="data-status failed-status">Failed</span>`}</td>
+          <td data-column="close">${item.close == null ? "N/A" : `Rs. ${formatMoney(item.close)}`}</td>
           <td colspan="16" class="failure-reason">${summary || "The required rule agreement was not reached."}${failures.length > 3 ? `<span class="muted">+${failures.length - 3} more in stock detail</span>` : ""}</td>
           <td>${sourceBadges(item)}</td>
         </tr>
@@ -822,39 +912,42 @@ function renderTable() {
     el.resultsBody.querySelectorAll("tr[data-symbol]").forEach((row) => {
       row.addEventListener("click", () => selectStock(row.dataset.symbol));
     });
+    applyColumnVisibility();
     return;
   }
   if (!state.results.length) {
     el.resultsBody.innerHTML = `<tr><td colspan="20" class="empty-state">No stocks passed this ${state.mode === "group" ? "rule group" : "rule"}.</td></tr>`;
+    applyColumnVisibility();
     return;
   }
   el.resultsBody.innerHTML = state.results.map((item) => `
     <tr class="${item.symbol === state.selectedSymbol ? "active" : ""}" data-symbol="${escapeHtml(item.symbol)}">
-      <td class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name)}</span></td>
-      <td>${item.totalRules ? `<strong>${item.matchCount}/${item.totalRules}</strong><span class="agreement-score">${formatPlainPct(item.weightedScore || 0)}</span>` : "-"}</td>
-      <td>Rs. ${formatMoney(item.close)}</td>
-      <td>${formatNumber(item.volume)}</td>
-      <td>${Number(item.relativeVolume || 0).toFixed(2)}x</td>
-      <td>${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}</td>
-      <td>${Number(item.relativeDelivery || 0).toFixed(2)}x</td>
-      <td class="${item.momentum3D > 0 ? "positive" : item.momentum3D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum3D || 0)}</td>
-      <td class="${item.momentum15D > 0 ? "positive" : item.momentum15D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum15D || 0)}</td>
-      <td>${formatPlainPct(item.closePositionDay || 0)}</td>
-      <td>${formatPlainPct(item.compression10D || 0)}</td>
-      <td>${formatPct(item.distanceFrom20DHigh || 0)}</td>
-      <td>${formatPlainPct(item.rangePosition52W || 0)}</td>
-      <td>${Number(item.obv3D || 0).toFixed(2)}x</td>
-      <td>${formatNumber(item.adv20)}</td>
-      <td>Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr</td>
-      <td class="${item.momentum1Y > 0 ? "positive" : item.momentum1Y < 0 ? "negative" : "neutral"}">${formatPct(item.momentum1Y || 0)}</td>
-      <td>${Number(item.rsi14).toFixed(2)}</td>
-      <td>${formatPlainPct(item.atrPct || 0)}</td>
-      <td class="${item.nextDayReturn > 0 ? "positive" : item.nextDayReturn < 0 ? "negative" : "neutral"}">${item.nextDayReturn == null ? "Pending" : formatPct(item.nextDayReturn)}</td>
+      <td data-column="stock" class="stock-name"><strong>${escapeHtml(item.symbol)}</strong><span title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span></td>
+      <td data-column="agreement">${item.totalRules ? `<strong>${item.matchCount}/${item.totalRules}</strong><span class="agreement-score">${formatPlainPct(item.weightedScore || 0)}</span>` : "-"}</td>
+      <td data-column="close">Rs. ${formatMoney(item.close)}</td>
+      <td data-column="volume">${formatNumber(item.volume)}</td>
+      <td data-column="relativeVolume">${Number(item.relativeVolume || 0).toFixed(2)}x</td>
+      <td data-column="deliveryPct">${item.deliveryPct == null ? "N/A" : formatPlainPct(item.deliveryPct)}</td>
+      <td data-column="relativeDelivery">${Number(item.relativeDelivery || 0).toFixed(2)}x</td>
+      <td data-column="momentum3D" class="${item.momentum3D > 0 ? "positive" : item.momentum3D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum3D || 0)}</td>
+      <td data-column="momentum15D" class="${item.momentum15D > 0 ? "positive" : item.momentum15D < 0 ? "negative" : "neutral"}">${formatPct(item.momentum15D || 0)}</td>
+      <td data-column="dayPosition">${formatPlainPct(item.closePositionDay || 0)}</td>
+      <td data-column="compression10D">${formatPlainPct(item.compression10D || 0)}</td>
+      <td data-column="high20D">${formatPct(item.distanceFrom20DHigh || 0)}</td>
+      <td data-column="range52W">${formatPlainPct(item.rangePosition52W || 0)}</td>
+      <td data-column="obv20D">${Number(item.obv3D || 0).toFixed(2)}x</td>
+      <td data-column="adv20">${formatNumber(item.adv20)}</td>
+      <td data-column="rupeeLiquidity">Rs. ${formatMoney(item.rupeeLiquidityCr || 0)} cr</td>
+      <td data-column="momentum1Y" class="${item.momentum1Y > 0 ? "positive" : item.momentum1Y < 0 ? "negative" : "neutral"}">${formatPct(item.momentum1Y || 0)}</td>
+      <td data-column="rsi14">${Number(item.rsi14).toFixed(2)}</td>
+      <td data-column="atrPct">${formatPlainPct(item.atrPct || 0)}</td>
+      <td data-column="nextDay" class="${item.nextDayReturn > 0 ? "positive" : item.nextDayReturn < 0 ? "negative" : "neutral"}">${item.nextDayReturn == null ? "Pending" : formatPct(item.nextDayReturn)}</td>
     </tr>
   `).join("");
   el.resultsBody.querySelectorAll("tr[data-symbol]").forEach((row) => {
     row.addEventListener("click", () => selectStock(row.dataset.symbol));
   });
+  applyColumnVisibility();
 }
 
 function renderDetails() {
@@ -1195,12 +1288,13 @@ async function createCombinedStockGroup() {
   }
 }
 
-async function selectStock(symbol) {
+async function selectStock(symbol, shouldOpen = true) {
   state.selectedSymbol = symbol;
   const prices = await fetchJson(`/api/prices?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(state.date)}`);
   state.prices = prices.prices || [];
   renderTable();
   renderDetails();
+  if (shouldOpen) openDetails();
 }
 
 function addFilter(filterId) {
