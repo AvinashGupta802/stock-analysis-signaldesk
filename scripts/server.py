@@ -175,6 +175,29 @@ FILTER_LIBRARY = [
         ],
     },
     {
+        "id": "recent_sma_crossover",
+        "name": "Recent SMA Crossover",
+        "category": "Price Trend",
+        "meaning": "Keep stocks whose close crossed from below to above a user-selected simple moving average during the latest few trading sessions.",
+        "fields": [
+            {"key": "smaPeriod", "label": "SMA period", "default": 7, "step": 1},
+            {"key": "crossoverLookbackSessions", "label": "Cross occurred within sessions", "default": 3, "step": 1},
+            {"key": "requireCurrentlyAbove", "label": "Require current close above SMA", "default": False, "type": "checkbox"},
+        ],
+    },
+    {
+        "id": "recent_delivery_burst",
+        "name": "Recent Delivery Quantity Burst",
+        "category": "Delivery",
+        "meaning": "Keep stocks that recorded unusually high delivered quantity on at least one recent day compared with the preceding average delivery quantity.",
+        "fields": [
+            {"key": "deliveryBurstLookbackSessions", "label": "Search latest sessions", "default": 5, "step": 1},
+            {"key": "deliveryAveragePeriod", "label": "Delivery average period", "default": 20, "step": 1},
+            {"key": "minDeliveryBurstRatio", "label": "Min delivery quantity ratio", "default": 1.2, "step": 0.1},
+            {"key": "maxDeliveryBurstRatio", "label": "Max delivery quantity ratio", "default": 999, "step": 0.1},
+        ],
+    },
+    {
         "id": "price_momentum_3d",
         "name": "3-Day Price Momentum",
         "category": "Price Trend",
@@ -1957,6 +1980,58 @@ def evaluate_filter(ctx, selected):
             return False, "20D average delivery quantity is not available for this stock/date."
         passed = min_relative_delivery <= ctx["relative_delivery"] <= max_relative_delivery
         return passed, f"Delivery quantity {ctx['relative_delivery']:.2f}x 20D average; required {min_relative_delivery:g}x-{max_relative_delivery:g}x."
+    if filter_id == "recent_sma_crossover":
+        rows = ctx.get("_rows") or []
+        index = int(ctx.get("_index", len(rows) - 1))
+        period = max(2, int(values.get("smaPeriod", 7)))
+        lookback = max(1, int(values.get("crossoverLookbackSessions", 3)))
+        require_current = bool(values.get("requireCurrentlyAbove", False))
+        if index < period + lookback - 1:
+            return False, f"At least {period + lookback} price sessions are required for this SMA crossover."
+        closes = [float(row["close"]) for row in rows]
+        crossed_on = None
+        current_sma = avg(closes[index - period + 1:index + 1])
+        for point in range(max(period, index - lookback + 1), index + 1):
+            point_sma = avg(closes[point - period + 1:point + 1])
+            previous_sma = avg(closes[point - period:point])
+            if closes[point] > point_sma and closes[point - 1] <= previous_sma:
+                crossed_on = rows[point].get("trade_date", str(point))
+        currently_above = closes[index] > current_sma
+        passed = crossed_on is not None and (currently_above or not require_current)
+        return passed, (
+            f"Close {'crossed above' if crossed_on else 'did not cross above'} SMA{period} within {lookback} sessions"
+            f"{f' on {crossed_on}' if crossed_on else ''}; current close is "
+            f"{'above' if currently_above else 'below'} SMA{period} ({current_sma:.2f})."
+        )
+    if filter_id == "recent_delivery_burst":
+        rows = ctx.get("_rows") or []
+        index = int(ctx.get("_index", len(rows) - 1))
+        lookback = max(1, int(values.get("deliveryBurstLookbackSessions", 5)))
+        average_period = max(2, int(values.get("deliveryAveragePeriod", 20)))
+        min_ratio = float(values.get("minDeliveryBurstRatio", 1.2))
+        max_ratio = float(values.get("maxDeliveryBurstRatio", 999))
+        if index < average_period + lookback - 1:
+            return False, f"At least {average_period + lookback} sessions are required for the delivery-burst comparison."
+        best_ratio = None
+        best_date = None
+        for point in range(index - lookback + 1, index + 1):
+            current_delivery = rows[point].get("deliverable_qty")
+            baseline = avg_available([
+                row.get("deliverable_qty") for row in rows[point - average_period:point]
+            ])
+            if current_delivery is None or baseline <= 0:
+                continue
+            ratio = current_delivery / baseline
+            if best_ratio is None or ratio > best_ratio:
+                best_ratio = ratio
+                best_date = rows[point].get("trade_date", str(point))
+        if best_ratio is None:
+            return False, "Recent delivery quantity or its preceding average is unavailable for this stock/date."
+        passed = min_ratio <= best_ratio <= max_ratio
+        return passed, (
+            f"Highest recent delivery quantity was {best_ratio:.2f}x the preceding {average_period}D average "
+            f"on {best_date}; required {min_ratio:g}x-{max_ratio:g}x within {lookback} sessions."
+        )
     if filter_id == "price_momentum_3d":
         min_momentum = float(values.get("minMomentum3D", 2))
         max_momentum = float(values.get("maxMomentum3D", 12))

@@ -125,6 +125,8 @@ class GrowthFilterTests(unittest.TestCase):
             "short_pause_after_impulse",
             "recent_pullback_recovery",
             "base_tightness_volume_dryup",
+            "recent_sma_crossover",
+            "recent_delivery_burst",
         }.issubset(filter_ids))
         self.assertEqual(
             {rule["id"] for rule in EXPERIMENTAL_SETUP_RULES},
@@ -192,6 +194,51 @@ class GrowthFilterTests(unittest.TestCase):
             },
         })
         self.assertTrue(passed, reason)
+
+    def test_recent_sma_crossover_filter(self):
+        closes = [100, 100, 100, 99, 99, 100, 102, 103]
+        rows = [
+            {"trade_date": f"2026-01-{index + 1:02d}", "close": close}
+            for index, close in enumerate(closes)
+        ]
+        passed, reason = evaluate_filter(
+            {"_rows": rows, "_index": len(rows) - 1, "close": closes[-1]},
+            {"id": "recent_sma_crossover", "values": {
+                "smaPeriod": 5,
+                "crossoverLookbackSessions": 3,
+                "requireCurrentlyAbove": True,
+            }},
+        )
+        self.assertTrue(passed, reason)
+
+    def test_recent_delivery_burst_filter(self):
+        rows = [
+            {"trade_date": f"2026-01-{index + 1:02d}", "close": 100, "deliverable_qty": 100}
+            for index in range(25)
+        ]
+        rows[-2]["deliverable_qty"] = 180
+        passed, reason = evaluate_filter(
+            {"_rows": rows, "_index": len(rows) - 1, "close": 100},
+            {"id": "recent_delivery_burst", "values": {
+                "deliveryBurstLookbackSessions": 3,
+                "deliveryAveragePeriod": 20,
+                "minDeliveryBurstRatio": 1.5,
+                "maxDeliveryBurstRatio": 999,
+            }},
+        )
+        self.assertTrue(passed, reason)
+
+    def test_recent_delivery_burst_reports_missing_data(self):
+        rows = [
+            {"trade_date": f"2026-01-{index + 1:02d}", "close": 100, "deliverable_qty": None}
+            for index in range(25)
+        ]
+        passed, reason = evaluate_filter(
+            {"_rows": rows, "_index": len(rows) - 1, "close": 100},
+            {"id": "recent_delivery_burst", "values": {}},
+        )
+        self.assertFalse(passed)
+        self.assertIn("unavailable", reason)
 
     def test_distance_from_high_requires_full_history(self):
         short_context = dict(self.context, history_count=200)
