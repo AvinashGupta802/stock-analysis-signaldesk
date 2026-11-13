@@ -217,6 +217,7 @@ class GrowthFilterTests(unittest.TestCase):
             for index in range(25)
         ]
         rows[-2]["deliverable_qty"] = 180
+        rows[-1]["close"] = 102
         passed, reason = evaluate_filter(
             {"_rows": rows, "_index": len(rows) - 1, "close": 100},
             {"id": "recent_delivery_burst", "values": {
@@ -224,6 +225,8 @@ class GrowthFilterTests(unittest.TestCase):
                 "deliveryAveragePeriod": 20,
                 "minDeliveryBurstRatio": 1.5,
                 "maxDeliveryBurstRatio": 999,
+                "minPriceResponseSinceBurstPct": 0.5,
+                "maxPriceResponseSinceBurstPct": 999,
             }},
         )
         self.assertTrue(passed, reason)

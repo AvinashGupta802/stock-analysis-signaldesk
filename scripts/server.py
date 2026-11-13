@@ -182,7 +182,9 @@ FILTER_LIBRARY = [
         "fields": [
             {"key": "smaPeriod", "label": "SMA period", "default": 7, "step": 1},
             {"key": "crossoverLookbackSessions", "label": "Cross occurred within sessions", "default": 3, "step": 1},
-            {"key": "requireCurrentlyAbove", "label": "Require current close above SMA", "default": False, "type": "checkbox"},
+            {"key": "requireCurrentlyAbove", "label": "Require current close above SMA", "default": True, "type": "checkbox"},
+            {"key": "smaSlopeLookbackSessions", "label": "SMA slope lookback sessions", "default": 3, "step": 1},
+            {"key": "minSmaSlopePct", "label": "Min SMA slope %", "default": 0, "step": 0.1},
         ],
     },
     {
@@ -195,6 +197,8 @@ FILTER_LIBRARY = [
             {"key": "deliveryAveragePeriod", "label": "Delivery average period", "default": 20, "step": 1},
             {"key": "minDeliveryBurstRatio", "label": "Min delivery quantity ratio", "default": 1.2, "step": 0.1},
             {"key": "maxDeliveryBurstRatio", "label": "Max delivery quantity ratio", "default": 999, "step": 0.1},
+            {"key": "minPriceResponseSinceBurstPct", "label": "Min price response since burst %", "default": 0.5, "step": 0.1},
+            {"key": "maxPriceResponseSinceBurstPct", "label": "Max price response since burst %", "default": 999, "step": 0.5},
         ],
     },
     {
@@ -1985,23 +1989,29 @@ def evaluate_filter(ctx, selected):
         index = int(ctx.get("_index", len(rows) - 1))
         period = max(2, int(values.get("smaPeriod", 7)))
         lookback = max(1, int(values.get("crossoverLookbackSessions", 3)))
-        require_current = bool(values.get("requireCurrentlyAbove", False))
-        if index < period + lookback - 1:
-            return False, f"At least {period + lookback} price sessions are required for this SMA crossover."
+        require_current = bool(values.get("requireCurrentlyAbove", True))
+        slope_lookback = max(1, int(values.get("smaSlopeLookbackSessions", 3)))
+        min_slope = float(values.get("minSmaSlopePct", 0))
+        required_history = period + max(lookback, slope_lookback)
+        if index < required_history - 1:
+            return False, f"At least {required_history} price sessions are required for this rising SMA crossover."
         closes = [float(row["close"]) for row in rows]
         crossed_on = None
         current_sma = avg(closes[index - period + 1:index + 1])
+        previous_sma = avg(closes[index - slope_lookback - period + 1:index - slope_lookback + 1])
+        slope_pct = pct(current_sma, previous_sma)
         for point in range(max(period, index - lookback + 1), index + 1):
             point_sma = avg(closes[point - period + 1:point + 1])
             previous_sma = avg(closes[point - period:point])
             if closes[point] > point_sma and closes[point - 1] <= previous_sma:
                 crossed_on = rows[point].get("trade_date", str(point))
         currently_above = closes[index] > current_sma
-        passed = crossed_on is not None and (currently_above or not require_current)
+        passed = crossed_on is not None and slope_pct >= min_slope and (currently_above or not require_current)
         return passed, (
             f"Close {'crossed above' if crossed_on else 'did not cross above'} SMA{period} within {lookback} sessions"
             f"{f' on {crossed_on}' if crossed_on else ''}; current close is "
-            f"{'above' if currently_above else 'below'} SMA{period} ({current_sma:.2f})."
+            f"{'above' if currently_above else 'below'} SMA{period} ({current_sma:.2f}); "
+            f"{slope_lookback}D SMA slope is {slope_pct:+.2f}% and must be >= {min_slope:g}%."
         )
     if filter_id == "recent_delivery_burst":
         rows = ctx.get("_rows") or []
@@ -2010,6 +2020,8 @@ def evaluate_filter(ctx, selected):
         average_period = max(2, int(values.get("deliveryAveragePeriod", 20)))
         min_ratio = float(values.get("minDeliveryBurstRatio", 1.2))
         max_ratio = float(values.get("maxDeliveryBurstRatio", 999))
+        min_price_response = float(values.get("minPriceResponseSinceBurstPct", 0.5))
+        max_price_response = float(values.get("maxPriceResponseSinceBurstPct", 999))
         if index < average_period + lookback - 1:
             return False, f"At least {average_period + lookback} sessions are required for the delivery-burst comparison."
         best_ratio = None
@@ -2027,10 +2039,20 @@ def evaluate_filter(ctx, selected):
                 best_date = rows[point].get("trade_date", str(point))
         if best_ratio is None:
             return False, "Recent delivery quantity or its preceding average is unavailable for this stock/date."
-        passed = min_ratio <= best_ratio <= max_ratio
+        burst_index = next(
+            point for point in range(index - lookback + 1, index + 1)
+            if rows[point].get("trade_date", str(point)) == best_date
+        )
+        price_response = pct(float(rows[index]["close"]), float(rows[max(0, burst_index - 1)]["close"]))
+        passed = (
+            min_ratio <= best_ratio <= max_ratio
+            and min_price_response <= price_response <= max_price_response
+        )
         return passed, (
             f"Highest recent delivery quantity was {best_ratio:.2f}x the preceding {average_period}D average "
-            f"on {best_date}; required {min_ratio:g}x-{max_ratio:g}x within {lookback} sessions."
+            f"on {best_date}; price response since immediately before the burst is {price_response:+.2f}%. "
+            f"Required delivery {min_ratio:g}x-{max_ratio:g}x and price response "
+            f"{min_price_response:g}%-{max_price_response:g}% within {lookback} sessions."
         )
     if filter_id == "price_momentum_3d":
         min_momentum = float(values.get("minMomentum3D", 2))

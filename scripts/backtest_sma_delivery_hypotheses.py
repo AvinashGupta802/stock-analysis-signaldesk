@@ -155,7 +155,13 @@ def build_atoms():
                 f"sma_cross_{period}_{lookback}",
                 f"Cross above SMA{period} within {lookback}D",
                 "recent_sma_crossover",
-                {"smaPeriod": period, "crossoverLookbackSessions": lookback, "requireCurrentlyAbove": False},
+                {
+                    "smaPeriod": period,
+                    "crossoverLookbackSessions": lookback,
+                    "requireCurrentlyAbove": True,
+                    "smaSlopeLookbackSessions": 3,
+                    "minSmaSlopePct": 0,
+                },
             ))
 
     delivery_atoms = []
@@ -171,6 +177,8 @@ def build_atoms():
                         "deliveryAveragePeriod": average_period,
                         "minDeliveryBurstRatio": ratio,
                         "maxDeliveryBurstRatio": 999,
+                        "minPriceResponseSinceBurstPct": 0.5,
+                        "maxPriceResponseSinceBurstPct": 999,
                     },
                 ))
 
