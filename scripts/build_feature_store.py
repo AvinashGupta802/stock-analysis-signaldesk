@@ -5,9 +5,13 @@ outcomes are stored in a separate table to reduce accidental look-ahead leakage.
 """
 
 import argparse
+import csv
 import math
+import os
 import sqlite3
+import tempfile
 from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 
 try:
@@ -24,13 +28,15 @@ DEFAULT_STORE = ROOT / "data" / "stock_feature_store.duckdb"
 DEFAULT_PARQUET = ROOT / "data" / "feature_store_parquet"
 
 RETURN_WINDOWS = [1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 60, 100, 126, 200, 252]
-SMA_WINDOWS = [5, 7, 10, 15, 20, 30, 50, 60, 100, 200]
+SMA_WINDOWS = [3, 5, 7, 10, 15, 20, 30, 50, 60, 80, 100, 120, 150, 200]
+SMA_SLOPE_LOOKBACKS = [1, 3, 5, 10]
+SMA_PAIRS = list(combinations(SMA_WINDOWS, 2))
 VOLUME_WINDOWS = [5, 7, 10, 15, 20, 30, 50, 60, 100, 200]
 DELIVERY_WINDOWS = [5, 10, 15, 20, 30, 50, 60]
 VOLATILITY_WINDOWS = [5, 10, 15, 20, 30, 50, 60, 100]
 RANGE_WINDOWS = [5, 10, 15, 20, 30, 50, 60, 100]
 OUTCOME_WINDOWS = [2, 5, 10, 15, 20, 30]
-FEATURE_VERSION = 1
+FEATURE_VERSION = 2
 
 
 def main():
@@ -72,9 +78,9 @@ def main():
         )
 
         feature_columns = [item["metric_id"] for item in definitions]
-        feature_sql = insert_sql("feature_values", ["instrument_id", "symbol", "trade_date", "feature_version", *feature_columns])
+        feature_insert_columns = ["instrument_id", "symbol", "trade_date", "feature_version", *feature_columns]
         outcome_columns = outcome_column_names()
-        outcome_sql = insert_sql("outcome_labels", ["instrument_id", "symbol", "trade_date", *outcome_columns])
+        outcome_insert_columns = ["instrument_id", "symbol", "trade_date", *outcome_columns]
         feature_batch = []
         outcome_batch = []
         feature_count = 0
@@ -90,21 +96,21 @@ def main():
             feature_batch.extend(feature_rows)
             outcome_batch.extend(outcome_rows)
             if len(feature_batch) >= args.batch_size:
-                store.executemany(feature_sql, feature_batch)
+                bulk_upsert(store, "feature_values", feature_insert_columns, feature_batch)
                 feature_count += len(feature_batch)
                 feature_batch.clear()
             if len(outcome_batch) >= args.batch_size:
-                store.executemany(outcome_sql, outcome_batch)
+                bulk_upsert(store, "outcome_labels", outcome_insert_columns, outcome_batch)
                 outcome_count += len(outcome_batch)
                 outcome_batch.clear()
             if number % 100 == 0 or number == len(instruments):
                 print(f"Processed {number:,}/{len(instruments):,} instruments", flush=True)
 
         if feature_batch:
-            store.executemany(feature_sql, feature_batch)
+            bulk_upsert(store, "feature_values", feature_insert_columns, feature_batch)
             feature_count += len(feature_batch)
         if outcome_batch:
-            store.executemany(outcome_sql, outcome_batch)
+            bulk_upsert(store, "outcome_labels", outcome_insert_columns, outcome_batch)
             outcome_count += len(outcome_batch)
         record_run(store, args, from_date, to_date, feature_count, outcome_count)
         print(f"Feature rows written: {feature_count:,}\nOutcome rows written: {outcome_count:,}", flush=True)
@@ -145,7 +151,22 @@ def feature_definitions():
     for window in SMA_WINDOWS:
         add(f"sma_{window}", f"SMA {window}", "Moving Average", f"Simple average close over {window} sessions.", window)
         add(f"close_vs_sma_{window}_pct", f"Close vs SMA{window} %", "Moving Average", f"Close distance from SMA{window}.", window)
-        add(f"sma_{window}_slope_3d_pct", f"SMA{window} 3D slope %", "Moving Average", f"Percentage change in SMA{window} over three sessions.", window + 3)
+        add(f"close_above_sma_{window}", f"Close above SMA{window}", "Moving Average", f"1 when close is above SMA{window}, otherwise 0.", window)
+        for lookback in SMA_SLOPE_LOOKBACKS:
+            add(f"sma_{window}_slope_{lookback}d_pct", f"SMA{window} {lookback}D slope %", "Moving Average", f"Percentage change in SMA{window} over {lookback} sessions.", window + lookback)
+        add(f"days_since_close_crossed_above_sma_{window}", f"Days since close crossed above SMA{window}", "Moving Average", f"Trading sessions since close most recently crossed above SMA{window}.", window + 1)
+        add(f"days_since_close_crossed_below_sma_{window}", f"Days since close crossed below SMA{window}", "Moving Average", f"Trading sessions since close most recently crossed below SMA{window}.", window + 1)
+    for fast, slow in SMA_PAIRS:
+        prefix = f"sma_{fast}_vs_sma_{slow}"
+        add(f"{prefix}_gap_pct", f"SMA{fast} vs SMA{slow} gap %", "SMA Pair", f"Percentage gap of SMA{fast} relative to SMA{slow}.", slow)
+        add(f"{prefix}_fast_above", f"SMA{fast} above SMA{slow}", "SMA Pair", f"1 when SMA{fast} is above SMA{slow}, otherwise 0.", slow)
+        add(f"{prefix}_crossed_above_today", f"SMA{fast} crossed above SMA{slow} today", "SMA Pair", f"1 when SMA{fast} crossed above SMA{slow} on this date.", slow + 1)
+        add(f"{prefix}_crossed_below_today", f"SMA{fast} crossed below SMA{slow} today", "SMA Pair", f"1 when SMA{fast} crossed below SMA{slow} on this date.", slow + 1)
+        add(f"{prefix}_days_since_bull_cross", f"Days since SMA{fast} bullish cross SMA{slow}", "SMA Pair", f"Sessions since SMA{fast} most recently crossed above SMA{slow}.", slow + 1)
+        add(f"{prefix}_days_since_bear_cross", f"Days since SMA{fast} bearish cross SMA{slow}", "SMA Pair", f"Sessions since SMA{fast} most recently crossed below SMA{slow}.", slow + 1)
+        for lookback in [1, 3, 5]:
+            add(f"{prefix}_spread_change_{lookback}d_pct", f"SMA{fast}/SMA{slow} spread change {lookback}D", "SMA Pair", f"Change in the SMA pair percentage gap over {lookback} sessions.", slow + lookback)
+        add(f"{prefix}_both_rising_3d", f"SMA{fast} and SMA{slow} both rising", "SMA Pair", f"1 when both averages have positive three-session slopes.", slow + 3)
     for window in VOLUME_WINDOWS:
         add(f"avg_volume_{window}d", f"Average volume {window}D", "Volume", f"Average traded volume over preceding {window} sessions.", window + 1)
         add(f"volume_ratio_{window}d", f"Volume / {window}D average", "Volume", f"Current volume divided by preceding {window}D average.", window + 1)
@@ -175,6 +196,12 @@ def ensure_schema(store, definitions):
           {feature_columns}, PRIMARY KEY (instrument_id, trade_date)
         )
     """)
+    existing_feature_columns = {
+        row[1] for row in store.execute("PRAGMA table_info('feature_values')").fetchall()
+    }
+    for item in definitions:
+        if item["metric_id"] not in existing_feature_columns:
+            store.execute(f'ALTER TABLE feature_values ADD COLUMN "{item["metric_id"]}" DOUBLE')
     outcome_columns = ",\n".join(f'"{name}" DOUBLE' for name in outcome_column_names())
     store.execute(f"""
         CREATE TABLE IF NOT EXISTS outcome_labels (
@@ -232,6 +259,14 @@ def calculate_instrument(instrument, rows, from_date, to_date, feature_columns):
     close_prefix = prefix_sum(closes)
     volume_prefix = prefix_sum(volumes)
     delivery_prefix, delivery_count = optional_prefix(deliveries)
+    sma_series = {
+        window: [rolling_average(close_prefix, index, window, include_current=True) for index in range(len(rows))]
+        for window in SMA_WINDOWS
+    }
+    close_cross_up = {window: None for window in SMA_WINDOWS}
+    close_cross_down = {window: None for window in SMA_WINDOWS}
+    pair_cross_up = {pair: None for pair in SMA_PAIRS}
+    pair_cross_down = {pair: None for pair in SMA_PAIRS}
     features = []
     outcomes = []
 
@@ -243,11 +278,54 @@ def calculate_instrument(instrument, rows, from_date, to_date, feature_columns):
         for window in RETURN_WINDOWS:
             values[f"return_{window}d_pct"] = percent(closes[index], closes[index - window]) if index >= window else None
         for window in SMA_WINDOWS:
-            sma = rolling_average(close_prefix, index, window, include_current=True)
-            previous_sma = rolling_average(close_prefix, index - 3, window, include_current=True)
+            sma = sma_series[window][index]
             values[f"sma_{window}"] = sma
             values[f"close_vs_sma_{window}_pct"] = percent(closes[index], sma)
-            values[f"sma_{window}_slope_3d_pct"] = percent(sma, previous_sma)
+            values[f"close_above_sma_{window}"] = boolean_number(sma is not None and closes[index] > sma)
+            for lookback in SMA_SLOPE_LOOKBACKS:
+                previous_sma = sma_series[window][index - lookback] if index >= lookback else None
+                values[f"sma_{window}_slope_{lookback}d_pct"] = percent(sma, previous_sma)
+            if index and sma is not None and sma_series[window][index - 1] is not None:
+                previous_above = closes[index - 1] > sma_series[window][index - 1]
+                current_above = closes[index] > sma
+                if current_above and not previous_above:
+                    close_cross_up[window] = index
+                if not current_above and previous_above:
+                    close_cross_down[window] = index
+            values[f"days_since_close_crossed_above_sma_{window}"] = days_since(index, close_cross_up[window])
+            values[f"days_since_close_crossed_below_sma_{window}"] = days_since(index, close_cross_down[window])
+        for fast, slow in SMA_PAIRS:
+            prefix = f"sma_{fast}_vs_sma_{slow}"
+            fast_value = sma_series[fast][index]
+            slow_value = sma_series[slow][index]
+            gap = percent(fast_value, slow_value)
+            values[f"{prefix}_gap_pct"] = gap
+            values[f"{prefix}_fast_above"] = boolean_number(gap is not None and gap > 0)
+            bull_cross = False
+            bear_cross = False
+            if index and gap is not None:
+                previous_gap = percent(sma_series[fast][index - 1], sma_series[slow][index - 1])
+                if previous_gap is not None:
+                    bull_cross = gap > 0 and previous_gap <= 0
+                    bear_cross = gap < 0 and previous_gap >= 0
+                    if bull_cross:
+                        pair_cross_up[(fast, slow)] = index
+                    if bear_cross:
+                        pair_cross_down[(fast, slow)] = index
+            values[f"{prefix}_crossed_above_today"] = boolean_number(bull_cross)
+            values[f"{prefix}_crossed_below_today"] = boolean_number(bear_cross)
+            values[f"{prefix}_days_since_bull_cross"] = days_since(index, pair_cross_up[(fast, slow)])
+            values[f"{prefix}_days_since_bear_cross"] = days_since(index, pair_cross_down[(fast, slow)])
+            for lookback in [1, 3, 5]:
+                previous_gap = percent(
+                    sma_series[fast][index - lookback], sma_series[slow][index - lookback]
+                ) if index >= lookback else None
+                values[f"{prefix}_spread_change_{lookback}d_pct"] = difference(gap, previous_gap)
+            fast_slope = percent(fast_value, sma_series[fast][index - 3]) if index >= 3 else None
+            slow_slope = percent(slow_value, sma_series[slow][index - 3]) if index >= 3 else None
+            values[f"{prefix}_both_rising_3d"] = boolean_number(
+                fast_slope is not None and slow_slope is not None and fast_slope > 0 and slow_slope > 0
+            )
         for window in VOLUME_WINDOWS:
             average_volume = rolling_average(volume_prefix, index, window, include_current=False)
             values[f"avg_volume_{window}d"] = average_volume
@@ -324,10 +402,31 @@ def incremental_start(store, fallback):
     return min(row[0] for row in dates).isoformat()
 
 
-def insert_sql(table, columns):
+def bulk_upsert(store, table, columns, rows):
+    if not rows:
+        return
     names = ", ".join(f'"{column}"' for column in columns)
-    placeholders = ", ".join("?" for _ in columns)
-    return f"INSERT OR REPLACE INTO {table} ({names}) VALUES ({placeholders})"
+    stage = f"stage_{table}"
+    store.execute(f"CREATE OR REPLACE TEMP TABLE {stage} AS SELECT {names} FROM {table} WHERE FALSE")
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", newline="", encoding="utf-8", suffix=".csv", delete=False
+    )
+    try:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerows(rows)
+        handle.close()
+        path = handle.name.replace("'", "''")
+        store.execute(
+            f"COPY {stage} FROM '{path}' (FORMAT CSV, HEADER FALSE, NULL '', QUOTE '\"', ESCAPE '\"')"
+        )
+        store.execute(f"INSERT OR REPLACE INTO {table} ({names}) SELECT {names} FROM {stage}")
+    finally:
+        if not handle.closed:
+            handle.close()
+        try:
+            os.unlink(handle.name)
+        except FileNotFoundError:
+            pass
 
 
 def record_run(store, args, from_date, to_date, feature_rows, outcome_rows):
@@ -393,6 +492,20 @@ def divide(value, baseline):
     if value is None or baseline in (None, 0):
         return None
     return value / baseline
+
+
+def difference(value, previous):
+    if value is None or previous is None:
+        return None
+    return value - previous
+
+
+def boolean_number(value):
+    return 1.0 if value else 0.0
+
+
+def days_since(index, event_index):
+    return float(index - event_index) if event_index is not None else None
 
 
 def range_position(value, low, high):
